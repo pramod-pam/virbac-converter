@@ -4,15 +4,15 @@ import pandas as pd
 import re
 import datetime
 import io
-import os  # लोगोसाठी हे आवश्यक आहे
+import os
 
-# वेब ॲपचे डिझाईन
+# Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
 st.title("📄 Virbac Account Statement Converter")
-st.markdown("CFA टीमसाठी: PDF अपलोड करा आणि **Excel + PDF** दोन्ही फॉरमॅट मिळवा.")
+st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
-uploaded_files = st.file_uploader("येथे PDF फाईल अपलोड करा", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
 
 def process_pdf_logic(uploaded_file):
     run_datetime = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
@@ -40,7 +40,8 @@ def process_pdf_logic(uploaded_file):
                                     candidate = parts[0].strip()
                                     cand_lower = candidate.lower()
                                     if len(candidate) < 3: continue
-                                    if cand_lower.startswith(('customer', 'payer', 'name', 'to,', 'date', 'time', 'page', 'statement')): continue
+                                    # 'accounting' shabda add kela ahe jene karun chukicha data yenar nahi
+                                    if cand_lower.startswith(('customer', 'payer', 'name', 'to,', 'date', 'time', 'page', 'statement', 'accounting')): continue
                                     if cand_lower in ['-', 'customer -', 'customer']: continue
                                     customer_name = candidate
                                     break
@@ -53,7 +54,7 @@ def process_pdf_logic(uploaded_file):
                 if p_text:
                     for line in p_text.split('\n'): extracted_rows.append(line.strip())
     except Exception as e:
-        return None, None, None, f"PDF वाचताना एरर: {e}"
+        return None, None, None, f"PDF vachtana error: {e}"
 
     final_data, running_balance, opening_balance, found_opening = [], 0.0, 0.0, False
     s_inv, pay, reco, c_oth, c_brk, g_ret, d_not, tcs, tds, tech_b, n_tech_b = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
@@ -122,7 +123,7 @@ def process_pdf_logic(uploaded_file):
             ("TECHNICAL BOUNCED", tech_b), ("NON TECHNICAL BOUNCED", n_tech_b), ("CLOSING BAL", running_balance)
         ]
         return final_data, header_info, summary_info, None
-    return None, None, None, "डेटा सापडला नाही."
+    return None, None, None, "Data sapadla nahi."
 
 def get_excel_download(final_data, header_info, summary_info):
     output = io.BytesIO()
@@ -144,13 +145,20 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info):
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
     
-    # --- लोगो प्रिंट करण्याचे लॉजिक ---
-    if os.path.exists("logo.png"):
-        pdf.image("logo.png", x=85, y=5, w=40)
+    # --- Advanced Logo Logic ---
+    logo_file = None
+    possible_names = ["logo.png", "Logo.png", "LOGO.png", "logo.jpg", "Logo.jpg", "logo.jpeg"]
+    for name in possible_names:
+        if os.path.exists(name):
+            logo_file = name
+            break
+            
+    if logo_file:
+        pdf.image(logo_file, x=85, y=5, w=40)
         pdf.ln(15)
     else:
         pdf.ln(5)
-    # ------------------------------------
+    # ---------------------------
     
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
@@ -214,12 +222,12 @@ if uploaded_files:
         data, h_info, s_info, err = process_pdf_logic(file)
         if err: st.error(err)
         else:
-            st.success(f"✅ {file.name} यशस्वीरीत्या कनवर्ट झाली!")
+            st.success(f"✅ {file.name} yashasviritia convert jhali!")
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button(f"📥 Excel डाऊनलोड करा", get_excel_download(data, h_info, s_info), f"{file.name}.xlsx")
+                st.download_button(f"📥 Excel Download", get_excel_download(data, h_info, s_info), f"{file.name}.xlsx")
             with col2:
                 try:
-                    st.download_button(f"📥 PDF डाऊनलोड करा", get_pdf_download_fpdf(data, h_info, s_info), f"{file.name}.pdf")
+                    st.download_button(f"📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info), f"{file.name}.pdf")
                 except Exception as e:
-                    st.warning(f"PDF बनवताना एरर: {e}")
+                    st.warning(f"PDF banavtana error: {e}")
