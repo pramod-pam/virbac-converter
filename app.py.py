@@ -29,27 +29,22 @@ def process_pdf_logic(uploaded_file):
             c_match = re.search(r'(?:Payer|Customer No).*?(\d{6})', clean_text, re.IGNORECASE)
             if c_match: 
                 customer_no = c_match.group(1).strip()
-                # --- Improved Customer Name Logic ---
                 for p in pdf.pages[:1]:
                     lines = [l.strip() for l in (p.extract_text() or "").split('\n') if l.strip()]
                     for i, line in enumerate(lines):
                         if customer_no in line:
-                            # Customer No chya nantarchya 4-5 olit naav shodha
-                            for j in range(i + 1, min(i + 6, len(lines))):
+                            for j in range(i + 1, min(i + 7, len(lines))):
                                 candidate = lines[j].strip()
                                 cand_lower = candidate.lower()
-                                # Garbage shabd gaala (Filter out)
                                 if len(candidate) < 4: continue
-                                if any(x in cand_lower for x in ['date', 'time', 'page', 'statement', 'accounting', 'period', 'payer', 'customer', 'limit']):
+                                if any(x in cand_lower for x in ['date', 'time', 'page', 'statement', 'accounting', 'period', 'payer', 'customer', 'limit', 'opening', 'bal', 'dt', 'balance']):
                                     continue
-                                # Jar naav sapadle tar break kara
                                 customer_name = candidate
                                 break
                         if customer_name: break
     except Exception as e:
         return None, None, None, f"PDF vachtana error: {e}"
 
-    # Extraction rows logic (existing)
     extracted_rows = []
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
@@ -126,30 +121,31 @@ def process_pdf_logic(uploaded_file):
         return final_data, header_info, summary_info, None
     return None, None, None, "Data sapadla nahi."
 
-# --- PDF Function with Manual Name Option ---
-def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name=""):
+# --- PDF Function with Manual Name & CFA Name ---
+def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="", cfa_name=""):
     from fpdf import FPDF
     pdf = FPDF()
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
     
-    # Logo Logic
     logo_file = next((f for f in ["logo.png", "Logo.png", "logo.jpg"] if os.path.exists(f)), None)
     if logo_file:
         pdf.image(logo_file, x=85, y=5, w=40)
         pdf.ln(15)
     else: pdf.ln(5)
     
-    name_to_print = manual_name if manual_name else header_info['CustomerName']
+    cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
 
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
     pdf.set_font("Arial", size=9)
     pdf.cell(190, 6, txt=f"Time: {header_info['Time']} | Period: {header_info['Period']}", ln=True, align='C')
-    pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {name_to_print}", ln=True, align='C')
+    pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}", ln=True, align='C')
+    if cfa_name.strip():
+        pdf.cell(190, 6, txt=f"CFA Name: {cfa_name}", ln=True, align='C')
     pdf.ln(5)
     
-    # ... (Rest of summary and table code same as before) ...
+    # Summary Table
     pdf.set_font("Arial", 'B', 9)
     pdf.cell(100, 6, "Transaction Type", border=1, align='L')
     pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
@@ -159,6 +155,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="")
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
+    # Main Table
     col_widths = [18, 55, 20, 18, 22, 22, 25]
     headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance"]
     pdf.set_font("Arial", 'B', 8)
@@ -181,25 +178,29 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="")
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
-    pdf.ln(8)
+    pdf.ln(5)
+    if cfa_name.strip():
+        pdf.cell(190, 6, f"Authorized Signatory: {cfa_name}", ln=True)
+    pdf.ln(5)
     pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
     
     return bytes(pdf.output(dest='S').encode('latin1'))
 
-# Excel logic (same)
-def get_excel_download(final_data, header_info, summary_info, manual_name=""):
+# Excel logic
+def get_excel_download(final_data, header_info, summary_info, manual_name="", cfa_name=""):
     output = io.BytesIO()
-    name_to_print = manual_name if manual_name else header_info['CustomerName']
+    cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         pd.DataFrame([
             ["Report Time:", header_info["Time"]], 
             ["Heading:", "STATEMENT OF ACCOUNT"], 
             ["Period:", header_info["Period"]], 
             ["Customer No:", header_info["CustomerNo"]],
-            ["Customer Name:", name_to_print]
+            ["Customer Name:", cust_name],
+            ["CFA Name:", cfa_name]
         ]).to_excel(writer, sheet_name='Statement', index=False, header=False)
-        pd.DataFrame(summary_info, columns=["TYPE", "AMOUNT"]).to_excel(writer, sheet_name='Statement', index=False, startrow=7)
-        pd.DataFrame(final_data).to_excel(writer, sheet_name='Statement', index=False, startrow=23)
+        pd.DataFrame(summary_info, columns=["TYPE", "AMOUNT"]).to_excel(writer, sheet_name='Statement', index=False, startrow=8)
+        pd.DataFrame(final_data).to_excel(writer, sheet_name='Statement', index=False, startrow=24)
     return output.getvalue()
 
 if uploaded_files:
@@ -209,12 +210,16 @@ if uploaded_files:
         else:
             st.success(f"✅ {file.name} ready!")
             
-            # --- Manual Name Input Feature ---
-            st.info(f"PDF madhun sapadlele naav: **{h_info['CustomerName']}**")
-            manual_name = st.text_input("Jar naav chukiche asel, tar ithe khari naav type kara (optional):", key=file.name)
+            # --- UI Input Boxes ---
+            st.info(f"PDF madhun aalele naav: **{h_info['CustomerName']}**")
+            col_in1, col_in2 = st.columns(2)
+            with col_in1:
+                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
+            with col_in2:
+                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
             
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, manual_name), f"{file.name}.xlsx")
+                st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx")
             with col2:
-                st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, manual_name), f"{file.name}.pdf")
+                st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf")
