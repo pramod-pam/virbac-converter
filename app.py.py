@@ -4,6 +4,7 @@ import pandas as pd
 import re
 import datetime
 import io
+import os  # लोगोसाठी हे आवश्यक आहे
 
 # वेब ॲपचे डिझाईन
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
@@ -22,31 +23,29 @@ def process_pdf_logic(uploaded_file):
             text_layout = first_page.extract_text(layout=True) or ""
             clean_text = " ".join(text_layout.split())
             
-            # Period
             p_match = re.search(r'(?:Account.*?date|period from).*?(\d{2}/\d{2}/\d{2,4})\s*(?:to|-)\s*(\d{2}/\d{2}/\d{2,4})', clean_text, re.IGNORECASE)
             if p_match: period = f"from {p_match.group(1)} To {p_match.group(2)}"
             
-            # Customer No 
             c_match = re.search(r'(?:Payer|Customer No).*?(\d{6})', clean_text, re.IGNORECASE)
             if c_match: 
                 customer_no = c_match.group(1).strip()
-                
-                # --- Customer Name शोधण्याचे नवीन हमखास लॉजिक (खालची ओळ वाचणे) ---
-                raw_text = first_page.extract_text() # नॉर्मल टेक्स्ट (Layout शिवाय)
-                if raw_text:
-                    # 'Customer No 606149' च्या बरोबर खालची ओळ (Next Line) उचलणे
-                    pattern = r'Customer No\s*' + re.escape(customer_no) + r'\s*\n+([^\n]+)'
-                    name_match = re.search(pattern, raw_text, re.IGNORECASE)
-                    if name_match:
-                        customer_name = name_match.group(1).strip()
-                    else:
-                        # जर काही कारणाने वरचे चालले नाही, तर दुसरी पद्धत
+                for p in pdf.pages[:2]:
+                    raw_text = p.extract_text(layout=True) or ""
+                    if customer_no in raw_text:
                         lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
                         for i, line in enumerate(lines):
-                            if customer_no in line and i + 1 < len(lines):
-                                customer_name = lines[i+1].strip()
-                                break
-                # -----------------------------------------------------------
+                            if customer_no in line:
+                                for j in range(i + 1, min(i + 8, len(lines))):
+                                    parts = re.split(r'\s{2,}', lines[j])
+                                    candidate = parts[0].strip()
+                                    cand_lower = candidate.lower()
+                                    if len(candidate) < 3: continue
+                                    if cand_lower.startswith(('customer', 'payer', 'name', 'to,', 'date', 'time', 'page', 'statement')): continue
+                                    if cand_lower in ['-', 'customer -', 'customer']: continue
+                                    customer_name = candidate
+                                    break
+                            if customer_name: break
+                    if customer_name: break
 
             extracted_rows = []
             for page in pdf.pages:
@@ -145,6 +144,14 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info):
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
     
+    # --- लोगो प्रिंट करण्याचे लॉजिक ---
+    if os.path.exists("logo.png"):
+        pdf.image("logo.png", x=85, y=5, w=40)
+        pdf.ln(15)
+    else:
+        pdf.ln(5)
+    # ------------------------------------
+    
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
     pdf.set_font("Arial", size=9)
@@ -213,7 +220,6 @@ if uploaded_files:
                 st.download_button(f"📥 Excel डाऊनलोड करा", get_excel_download(data, h_info, s_info), f"{file.name}.xlsx")
             with col2:
                 try:
-                    import fpdf
                     st.download_button(f"📥 PDF डाऊनलोड करा", get_pdf_download_fpdf(data, h_info, s_info), f"{file.name}.pdf")
-                except:
-                    st.warning("PDF साठी आधी 'pip install fpdf' करा.")
+                except Exception as e:
+                    st.warning(f"PDF बनवताना एरर: {e}")
