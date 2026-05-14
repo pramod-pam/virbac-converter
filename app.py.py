@@ -143,8 +143,12 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
     pdf.set_font("Arial", size=9)
     pdf.cell(190, 6, txt=f"Time: {header_info['Time']} | Period: {header_info['Period']}", ln=True, align='C')
-    # Ithe ekach line var Customer Name ani CFA Name disel
-    pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}", ln=True, align='C')
+    
+    if cfa_name.strip():
+        pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}", ln=True, align='C')
+    else:
+        pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}", ln=True, align='C')
+        
     pdf.ln(5)
     
     # Summary Table
@@ -210,18 +214,24 @@ if uploaded_files:
         data, h_info, s_info, err = process_pdf_logic(file)
         if err: st.error(err)
         else:
-            st.success(f"✅ {file.name} ready!")
+            st.success(f"✅ {file.name} वाचून तयार आहे!")
             
-            # --- UI Input Boxes ---
-            st.info(f"PDF madhun aalele naav: **{h_info['CustomerName']}**")
+            st.info(f"PDF मधून आलेले कस्टमरचे नाव: **{h_info['CustomerName']}**")
             col_in1, col_in2 = st.columns(2)
             with col_in1:
-                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
+                manual_name = st.text_input("Customer Name (जर नाव चुकीचे असेल तर इथे बदला):", key=f"cust_{file.name}")
             with col_in2:
-                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
+                cfa_name = st.text_input("CFA Name (इथे CFA चे नाव टाका):", key=f"cfa_{file.name}")
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx")
-            with col2:
-                st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf")
+            # --- नवीन ऑटोमॅटिक सिस्टीम ---
+            # हे बटण दाबल्यावर माहिती आपसुक सेव्ह होईल आणि डाऊनलोडची बटणे दिसतील.
+            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"):
+                st.session_state[f"ready_{file.name}"] = True
+                
+            if st.session_state.get(f"ready_{file.name}", False):
+                st.write("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button("📥 Excel डाऊनलोड करा", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                with col2:
+                    st.download_button("📥 PDF डाऊनलोड करा", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
