@@ -135,14 +135,16 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     else: pdf.ln(5)
     
     cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
+    
+    # CFA Name chi line tayar karne
+    cfa_text = f" | CFA Name: {cfa_name}" if cfa_name.strip() else ""
 
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
     pdf.set_font("Arial", size=9)
     pdf.cell(190, 6, txt=f"Time: {header_info['Time']} | Period: {header_info['Period']}", ln=True, align='C')
-    pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}", ln=True, align='C')
-    if cfa_name.strip():
-        pdf.cell(190, 6, txt=f"CFA Name: {cfa_name}", ln=True, align='C')
+    # Ithe ekach line var Customer Name ani CFA Name disel
+    pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}", ln=True, align='C')
     pdf.ln(5)
     
     # Summary Table
