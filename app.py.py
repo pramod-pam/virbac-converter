@@ -136,7 +136,7 @@ def process_pdf_logic(uploaded_file):
             elif s_type == "Credit Note(Brakage Expiry)": c_brk += val
             elif s_type == "Goods Return Invoice": g_ret += val
             elif s_type == "Debit Note": d_not += val
-            elif s_type == "TCS Debit Note", "TCS Debit Note": tcs += val
+            elif s_type == "TCS Debit Note": tcs += val
             elif s_type == "TDS Credit Note": tds += val
             elif s_type == "TECHNICAL BOUNCED": tech_b += val
             elif s_type == "NON TECHNICAL BOUNCED": n_tech_b += val
