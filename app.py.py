@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Updated)")
+st.title("📄 Virbac Account Statement Converter (Auto-Match)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -79,13 +79,11 @@ def process_pdf_logic(uploaded_file):
             val = float(re.sub(r'[^\d.]', '', amount_str))
             if val == 0.0: continue
             
-            # --- Document Number (Strictly 9 or 10 digits only) ---
             doc_no_match = re.search(r'\b\d{9,10}\b', row_text)
             doc_no = doc_no_match.group(0) if doc_no_match else ""
             
             t_type, s_type = "Other", "Other"
             
-            # --- Transaction Types Logic ---
             if ("TDSRECO" in row_upper and doc_no.startswith('000') and is_cr) or ("TDS CREDIT NOTE" in row_upper): 
                 t_type, s_type = "TDS Credit Note", "TDS Credit Note"
             elif "CBOU199" in row_upper: 
@@ -107,18 +105,14 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            # --- Cheque/UTR Extraction (Separated properly) ---
             chq_no = ""
             tokens = row_text.split()
             potential_chq_tokens = [t for t in tokens if t != doc_no and len(t) >= 6]
             for token in potential_chq_tokens:
-                # 6 digit physical cheque
                 if token.isdigit() and len(token) == 6:
                     chq_no = token
                     break
-                # UTR or NEFT number (alphanumeric, 8 to 25 chars)
                 elif re.match(r'^[A-Za-z0-9]{8,25}$', token):
-                    # Bounced che code (CBOU) ignore karayche
                     if token.upper() not in ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING"] and not token.upper().startswith("CBOU"):
                         chq_no = token
                         break
@@ -140,6 +134,26 @@ def process_pdf_logic(uploaded_file):
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2)})
 
     if final_data:
+        # --- NEW LOGIC: Auto-Match Bounced Cheque No from previous Payments ---
+        for i in range(len(final_data)):
+            if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
+                # Find amount of the bounced check
+                b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
+                b_doc = final_data[i]["Doc No"]
+                
+                # Search backwards to find the most recent matching payment
+                for j in range(i - 1, -1, -1):
+                    if final_data[j]["Type"] == "PAYMENT":
+                        p_amt = final_data[j]["Credit"] if final_data[j]["Credit"] != "" else final_data[j]["Debit"]
+                        p_doc = final_data[j]["Doc No"]
+                        
+                        # Match by Document No OR exact Amount
+                        if (b_amt != "" and b_amt == p_amt) or (b_doc != "" and b_doc == p_doc):
+                            if final_data[j]["Chq No"]:
+                                final_data[i]["Chq No"] = final_data[j]["Chq No"]
+                                break
+        # ----------------------------------------------------------------------
+
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2)})
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
         summary_info = [
