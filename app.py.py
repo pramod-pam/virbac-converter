@@ -102,25 +102,22 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            # --- नवीन चीक/NEFT/RTGS नंबर काढण्याचे लॉजिक ---
+            # --- Smart Cheque/UTR Extraction Logic (Revised for 6-digits and alphanumeric) ---
             chq_no = ""
-            if s_type == "PAYMENT":
-                # १. आधी ६ अंकी साधा चेक नंबर शोधेल
-                chq_match = re.search(r'\b\d{6}\b', row_text)
-                if chq_match and chq_match.group(0) != doc_no: 
-                    chq_no = chq_match.group(0)
-                
-                # २. जर चेक नंबर नाही मिळाला, तर अल्फा-न्युमरिक NEFT/RTGS नंबर शोधेल
-                if not chq_no:
-                    utr_match = re.search(r'\b[A-Z0-9]{8,25}\b', row_upper)
-                    if utr_match and utr_match.group(0) != doc_no and not utr_match.group(0).isalpha(): 
-                        chq_no = utr_match.group(0)
-                        
-                # ३. जर नंबर आणि शब्द चिकटून आले असतील (उदा. NEFT1234567)
-                if not chq_no:
-                    kw_match = re.search(r'(?:CHQ|NEFT|RTGS|DD)[^\w]*([A-Z0-9]{6,25})', row_upper)
-                    if kw_match and kw_match.group(1) != doc_no: 
-                        chq_no = kw_match.group(1)
+            tokens = row_text.split()
+            # Oolitil doc_no sodun bakiche tokens check kara
+            potential_chq_tokens = [t for t in tokens if t != doc_no and len(t) >= 6]
+            
+            for token in potential_chq_tokens:
+                # 1. Jar shubda 6-digit numeric asel (Standard Cheque)
+                if token.isdigit() and len(token) == 6:
+                    chq_no = token
+                    break
+                # 2. Jar shubda Alphanumeric asel (UTR/NEFT)
+                elif re.match(r'^[A-Za-z0-9]{8,25}$', token):
+                    if token.upper() not in ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING"]:
+                        chq_no = token
+                        break
             # ------------------------------------------------
 
             debit, credit = (val, 0.0) if not is_cr else (0.0, val)
@@ -181,21 +178,19 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # इथे Cheque No चा कॉलम थोडा मोठा (22) केला आहे जेणेकरून NEFT नंबर बसेल
-    col_widths = [18, 51, 18, 24, 22, 22, 25]
+    col_widths = [18, 45, 18, 28, 22, 22, 25]
     headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance"]
     pdf.set_font("Arial", 'B', 8)
     for i in range(len(headers)):
         pdf.cell(col_widths[i], 6, headers[i], border=1, align='C')
     pdf.ln()
-    pdf.set_font("Arial", size=7) # फॉन्ट थोडा बारीक केलाय
+    pdf.set_font("Arial", size=7) 
     for r in final_data:
         if pdf.get_y() > 275: pdf.add_page()
         pdf.cell(col_widths[0], 6, str(r['Date']), border=1, align='C')
         pdf.cell(col_widths[1], 6, str(r['Type'])[:30], border=1, align='L')
         pdf.cell(col_widths[2], 6, str(r['Doc No']), border=1, align='C')
-        # Chq No कॉलम
-        pdf.cell(col_widths[3], 6, str(r['Chq No'])[:16], border=1, align='C')
+        pdf.cell(col_widths[3], 6, str(r['Chq No'])[:20], border=1, align='C')
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
