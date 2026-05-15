@@ -160,7 +160,7 @@ def process_pdf_logic(uploaded_file):
                                 final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
         
-        # 2. Smart Summary for Split Payments Logic (👉 kaadhun saadha -> baal takla ahe)
+        # 2. --- NEW LOGIC: Smart Summary for Split Payments ---
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
@@ -180,15 +180,17 @@ def process_pdf_logic(uploaded_file):
                 adj_formatted = f"{int(amt):,}"
                 total_formatted = f"{int(chq_stats[key]['sum']):,}"
                 
+                # जर एकापेक्षा जास्त तुकडे असतील 
                 if chq_stats[key]['count'] > 1:
                     r["Type"] = "PAYMENT"
                     r["Remarks"] = f"Inv: {r['Doc No']} | Adj: {adj_formatted}"
                     chq_stats[key]['seen'] += 1
                     
+                    # जर ही या चेकची शेवटची ओळ असेल, तर खाली नवीन 'Summary' ओळ टाका
                     if chq_stats[key]['seen'] == chq_stats[key]['count']:
                         summary_row = {
                             "Date": "", 
-                            "Type": "-> CHQ SUMMARY", # Safe text implemented
+                            "Type": "👉 CHQ SUMMARY", 
                             "Doc No": "", 
                             "Chq No": key, 
                             "Debit": "", 
@@ -197,10 +199,12 @@ def process_pdf_logic(uploaded_file):
                             "Remarks": f"Total Adj: {total_formatted} | Chq Amt: {total_formatted}"
                         }
                         new_final_data.append(summary_row)
+                # जर एकच पेमेंट असेल
                 else:
                     r["Remarks"] = f"Inv: {r['Doc No']} | Adj: {adj_formatted}"
                     
         final_data = new_final_data
+        # ------------------------------------------------------------
 
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
@@ -218,11 +222,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf = FPDF()
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
-    
-    # Safety filter to completely avoid UnicodeEncodeError
-    def safe_str(s):
-        return str(s).encode('latin1', 'ignore').decode('latin1')
-        
     logo_file = next((f for f in ["logo.png", "Logo.png", "logo.jpg"] if os.path.exists(f)), None)
     if logo_file:
         pdf.image(logo_file, x=85, y=5, w=40)
@@ -233,18 +232,18 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
     pdf.set_font("Arial", size=9)
-    pdf.cell(190, 6, txt=safe_str(f"Time: {header_info['Time']} | Period: {header_info['Period']}"), ln=True, align='C')
+    pdf.cell(190, 6, txt=f"Time: {header_info['Time']} | Period: {header_info['Period']}", ln=True, align='C')
     if cfa_name.strip():
-        pdf.cell(190, 6, txt=safe_str(f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C')
+        pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}", ln=True, align='C')
     else:
-        pdf.cell(190, 6, txt=safe_str(f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}"), ln=True, align='C')
+        pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}", ln=True, align='C')
     pdf.ln(5)
     pdf.set_font("Arial", 'B', 9)
     pdf.cell(100, 6, "Transaction Type", border=1, align='L')
     pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
     pdf.set_font("Arial", size=9)
     for row in summary_info:
-        pdf.cell(100, 6, safe_str(row[0]), border=1, align='L')
+        pdf.cell(100, 6, str(row[0]), border=1, align='L')
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
@@ -258,19 +257,20 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     for r in final_data:
         if pdf.get_y() > 275: pdf.add_page()
         
+        # Summary row ला बोल्ड (Bold) करण्यासाठी लॉजिक
         if "CHQ SUMMARY" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
         else:
             pdf.set_font("Arial", size=6)
             
-        pdf.cell(col_widths[0], 6, safe_str(r['Date']), border=1, align='C')
-        pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:25], border=1, align='L')
-        pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), border=1, align='C')
-        pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], border=1, align='C')
+        pdf.cell(col_widths[0], 6, str(r['Date']), border=1, align='C')
+        pdf.cell(col_widths[1], 6, str(r['Type'])[:25], border=1, align='L')
+        pdf.cell(col_widths[2], 6, str(r['Doc No']), border=1, align='C')
+        pdf.cell(col_widths[3], 6, str(r['Chq No'])[:16], border=1, align='C')
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
-        pdf.cell(col_widths[7], 6, safe_str(r['Remarks'])[:65], border=1, align='L')
+        pdf.cell(col_widths[7], 6, str(r['Remarks'])[:65], border=1, align='L')
         pdf.ln()
         
     pdf.ln(10)
@@ -278,7 +278,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
     pdf.ln(5)
     if cfa_name.strip():
-        pdf.cell(190, 6, safe_str(f"Authorized Signatory: {cfa_name}"), ln=True)
+        pdf.cell(190, 6, f"Authorized Signatory: {cfa_name}", ln=True)
     pdf.ln(5)
     pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
     return bytes(pdf.output(dest='S').encode('latin1'))
@@ -305,7 +305,18 @@ if uploaded_files:
         if err: st.error(err)
         else:
             st.success(f"✅ {file.name} ready!")
-            st.info(f"PDF मधून आलेले CUSTOMERचे नाव: **{h_info['CustomerName']}**")
+            st.info(f"PDF मधून आलेले कस्टमरचे नाव: **{h_info['CustomerName']}**")
             col_in1, col_in2 = st.columns(2)
             with col_in1:
-                manual_name = st.text_
+                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
+            with col_in2:
+                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
+            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"):
+                st.session_state[f"ready_{file.name}"] = True
+            if st.session_state.get(f"ready_{file.name}", False):
+                st.write("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                with col2:
+                    st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
