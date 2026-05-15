@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Date Bug Fixed)")
+st.title("📄 Virbac Account Statement Converter (Amount Bug Fixed)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -105,28 +105,33 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            # --- तारखेचा प्रॉब्लेम फिक्स ---
+            # --- अमाउंट बग फिक्स (Amount Bug Fix) ---
             chq_no = ""
-            tokens = row_text.split()
-            
-            for token in tokens:
-                # १. जर हा शब्द तारीख असेल (उदा. 06/02/26) किंवा मूळ तारीख असेल, तर त्याला सोडून द्या
-                if re.match(r'\d{2}/\d{2}/\d{2}', token) or token == date:
-                    continue
-                
-                clean_token = re.sub(r'[^A-Za-z0-9]', '', token)
-                
-                if not clean_token or clean_token == doc_no:
-                    continue
-                
-                if clean_token.isdigit() and len(clean_token) == 6:
-                    chq_no = token  
-                    break
-                elif re.match(r'^[A-Za-z0-9]{8,25}$', clean_token):
-                    ignore_words = ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING", "TECHNICAL", "BOUNCED", "NON"]
-                    if clean_token.upper() not in ignore_words and not clean_token.upper().startswith("CBOU"):
+            # चेक नंबर फक्त PAYMENT आणि BOUNCED मध्येच शोधायचा आहे, Invoice मध्ये नाही!
+            if s_type in ["PAYMENT", "TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"] or any(x in row_upper for x in ["CHQ", "NEFT", "DD", "RTGS"]):
+                tokens = row_text.split()
+                for token in tokens:
+                    # १. जर हा शब्द तारीख असेल तर सोडून द्या
+                    if re.match(r'\d{2}/\d{2}/\d{2}', token) or token == date:
+                        continue
+                    
+                    # २. जर शब्दात दशांश आणि दोन शून्य (.00) किंवा स्वल्पविराम (,) असेल, तर ती 'रक्कम' आहे, चेक नंबर नाही!
+                    if re.search(r'\.\d{2}\)?$', token) or re.search(r'\d,\d', token):
+                        continue
+                        
+                    clean_token = re.sub(r'[^A-Za-z0-9]', '', token)
+                    
+                    if not clean_token or clean_token == doc_no:
+                        continue
+                    
+                    if clean_token.isdigit() and len(clean_token) == 6:
                         chq_no = token  
                         break
+                    elif re.match(r'^[A-Za-z0-9]{8,25}$', clean_token):
+                        ignore_words = ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING", "TECHNICAL", "BOUNCED", "NON"]
+                        if clean_token.upper() not in ignore_words and not clean_token.upper().startswith("CBOU"):
+                            chq_no = token  
+                            break
             # -------------------------------
 
             debit, credit = (val, 0.0) if not is_cr else (0.0, val)
