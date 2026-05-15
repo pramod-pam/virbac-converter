@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Amount Bug Fixed)")
+st.title("📄 Virbac Account Statement Converter (Global Auto-Total)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -105,22 +105,16 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            # --- अमाउंट बग फिक्स (Amount Bug Fix) ---
             chq_no = ""
-            # चेक नंबर फक्त PAYMENT आणि BOUNCED मध्येच शोधायचा आहे, Invoice मध्ये नाही!
             if s_type in ["PAYMENT", "TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"] or any(x in row_upper for x in ["CHQ", "NEFT", "DD", "RTGS"]):
                 tokens = row_text.split()
                 for token in tokens:
-                    # १. जर हा शब्द तारीख असेल तर सोडून द्या
                     if re.match(r'\d{2}/\d{2}/\d{2}', token) or token == date:
                         continue
-                    
-                    # २. जर शब्दात दशांश आणि दोन शून्य (.00) किंवा स्वल्पविराम (,) असेल, तर ती 'रक्कम' आहे, चेक नंबर नाही!
                     if re.search(r'\.\d{2}\)?$', token) or re.search(r'\d,\d', token):
                         continue
                         
                     clean_token = re.sub(r'[^A-Za-z0-9]', '', token)
-                    
                     if not clean_token or clean_token == doc_no:
                         continue
                     
@@ -132,7 +126,6 @@ def process_pdf_logic(uploaded_file):
                         if clean_token.upper() not in ignore_words and not clean_token.upper().startswith("CBOU"):
                             chq_no = token  
                             break
-            # -------------------------------
 
             debit, credit = (val, 0.0) if not is_cr else (0.0, val)
             running_balance += (debit - credit)
@@ -151,6 +144,7 @@ def process_pdf_logic(uploaded_file):
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2)})
 
     if final_data:
+        # 1. Bounced Cheque Logic
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
@@ -165,6 +159,28 @@ def process_pdf_logic(uploaded_file):
                             if final_data[j]["Chq No"]:
                                 final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
+        
+        # 2. --- NEW LOGIC: Global Auto-Total (Statement wise) ---
+        chq_stats = {}
+        # Pahile purna PDF madhle same cheque no shoda (Date condition kadhli ahe)
+        for r in final_data:
+            if "PAYMENT" in r["Type"] and r["Chq No"]:
+                # Logic: Fkt Chq No var group kara
+                key = r["Chq No"]
+                amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                if key not in chq_stats:
+                    chq_stats[key] = {'sum': 0.0, 'count': 0}
+                chq_stats[key]['sum'] += amt
+                chq_stats[key]['count'] += 1
+
+        # Mag jithe jithe toh chq no ahe titha total dakva
+        for r in final_data:
+            if "PAYMENT" in r["Type"] and r["Chq No"]:
+                key = r["Chq No"]
+                if chq_stats[key]['count'] > 1:
+                    total_formatted = f"{int(chq_stats[key]['sum']):,}"
+                    r["Type"] = f"PAYMENT (Total: {total_formatted})"
+        # ----------------------------------------------------------------------
 
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2)})
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
