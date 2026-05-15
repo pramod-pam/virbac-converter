@@ -6,7 +6,7 @@ import datetime
 import io
 import os
 
-# Web app design - Title madhye (Updated) takle ahe
+# Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
 st.title("📄 Virbac Account Statement Converter (Updated)")
@@ -79,7 +79,8 @@ def process_pdf_logic(uploaded_file):
             val = float(re.sub(r'[^\d.]', '', amount_str))
             if val == 0.0: continue
             
-            doc_no_match = re.search(r'\b\d{6,10}\b', row_text)
+            # --- Document Number (Strictly 9 or 10 digits only) ---
+            doc_no_match = re.search(r'\b\d{9,10}\b', row_text)
             doc_no = doc_no_match.group(0) if doc_no_match else ""
             
             t_type, s_type = "Other", "Other"
@@ -91,15 +92,12 @@ def process_pdf_logic(uploaded_file):
                 t_type, s_type = "TECHNICAL BOUNCED", "TECHNICAL BOUNCED"
             elif any(code in row_upper for code in ["CBOU101", "CBOU102", "CBOU110"]): 
                 t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
-            
-            # RECONCILIATION madhye Adjusted no dakhavnyache logic
             elif "RECONC" in row_upper: 
                 s_type = "RECONCILIATION"
                 if doc_no:
                     t_type = f"RECONCILIATION (Adj: {doc_no})"
                 else:
                     t_type = "RECONCILIATION"
-                    
             elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]) or (doc_no.startswith('000') and is_cr): 
                 t_type, s_type = "PAYMENT", "PAYMENT"
             elif "INVOICE" in row_upper:
@@ -109,16 +107,19 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            # Cheque/UTR Extraction
+            # --- Cheque/UTR Extraction (Separated properly) ---
             chq_no = ""
             tokens = row_text.split()
             potential_chq_tokens = [t for t in tokens if t != doc_no and len(t) >= 6]
             for token in potential_chq_tokens:
+                # 6 digit physical cheque
                 if token.isdigit() and len(token) == 6:
                     chq_no = token
                     break
+                # UTR or NEFT number (alphanumeric, 8 to 25 chars)
                 elif re.match(r'^[A-Za-z0-9]{8,25}$', token):
-                    if token.upper() not in ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING"]:
+                    # Bounced che code (CBOU) ignore karayche
+                    if token.upper() not in ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING"] and not token.upper().startswith("CBOU"):
                         chq_no = token
                         break
 
