@@ -58,10 +58,10 @@ def process_pdf_logic(uploaded_file):
     for row_text in extracted_rows:
         row_upper = row_text.upper()
         if "OPENING BALANCE" in row_upper and not found_opening:
-            amounts = re.findall(r'\(?[\d,]+\.\d{2}\)?', row_text)
+            amounts = re.findall(r'-?\(?[\d,]+\.\d{2}\)?', row_text)
             if amounts:
                 amount_str = amounts[-1]
-                is_cr = 'CR' in row_upper or '(' in amount_str
+                is_cr = 'CR' in row_upper or '(' in amount_str or '-' in amount_str
                 val = float(re.sub(r'[^\d.]', '', amount_str))
                 opening_balance = val
                 running_balance = -val if is_cr else val
@@ -72,19 +72,35 @@ def process_pdf_logic(uploaded_file):
         date_match = re.search(r'\b(\d{2}/\d{2}/\d{2})\b', row_text)
         if date_match:
             if any(x in row_upper for x in ["DATE:", "ACCOUNTING DATE", "TIME:", "PAGE"]): continue
-            date, amounts = date_match.group(1), re.findall(r'\(?[\d,]+\.\d{2}\)?', row_text)
+            date, amounts = date_match.group(1), re.findall(r'-?\(?[\d,]+\.\d{2}\)?', row_text)
             if not amounts: continue
             amount_str = amounts[-1]
-            is_cr, val = ('CR' in row_upper or '(' in amount_str), float(re.sub(r'[^\d.]', '', amounts[-1]))
+            is_cr = 'CR' in row_upper or '(' in amount_str or '-' in amount_str
+            val = float(re.sub(r'[^\d.]', '', amount_str))
             if val == 0.0: continue
-            doc_no = (re.search(r'\b\d{9}\b', row_text)).group(0) if re.search(r'\b\d{9}\b', row_text) else ""
+            
+            # --- Document Number extraction सुधारले आहे (6 te 10 digits) ---
+            doc_no_match = re.search(r'\b\d{6,10}\b', row_text)
+            doc_no = doc_no_match.group(0) if doc_no_match else ""
             
             t_type, s_type = "Other", "Other"
-            if "TDSRECO" in row_upper or "TDS CREDIT NOTE" in row_upper or (doc_no.startswith('000') and is_cr): t_type, s_type = "TDS Credit Note", "TDS Credit Note"
-            elif "CBOU199" in row_upper: t_type, s_type = "TECHNICAL BOUNCED", "TECHNICAL BOUNCED"
-            elif any(code in row_upper for code in ["CBOU101", "CBOU102", "CBOU110"]): t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
-            elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]): t_type, s_type = "PAYMENT", "PAYMENT"
-            elif "RECONC" in row_upper: t_type, s_type = "RECONCILIATION", "RECONCILIATION"
+            
+            # 1. TDS Logic
+            if ("TDSRECO" in row_upper and doc_no.startswith('000') and is_cr) or ("TDS CREDIT NOTE" in row_upper): 
+                t_type, s_type = "TDS Credit Note", "TDS Credit Note"
+            elif "CBOU199" in row_upper: 
+                t_type, s_type = "TECHNICAL BOUNCED", "TECHNICAL BOUNCED"
+            elif any(code in row_upper for code in ["CBOU101", "CBOU102", "CBOU110"]): 
+                t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
+                
+            # 2. Reconciliation Logic (Ata doc_no barobar reflect hoil)
+            elif "RECONC" in row_upper or (doc_no.startswith('000') and "RECONC" in row_upper): 
+                t_type, s_type = "RECONCILIATION", "RECONCILIATION"
+
+            # 3. Payment Logic
+            elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]) or (doc_no.startswith('000') and is_cr): 
+                t_type, s_type = "PAYMENT", "PAYMENT"
+                
             elif "INVOICE" in row_upper:
                 if doc_no.startswith('3'): t_type, s_type = "Credit Note(Brakage Expiry)", "Credit Note(Brakage Expiry)"
                 elif doc_no.startswith('4'): t_type, s_type = "Credit Note(Others)", "Credit Note(Others)"
@@ -121,37 +137,28 @@ def process_pdf_logic(uploaded_file):
         return final_data, header_info, summary_info, None
     return None, None, None, "Data sapadla nahi."
 
-# --- PDF Function with Manual Name & CFA Name ---
+# --- Baki PDF/Excel functions same ahet ---
 def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="", cfa_name=""):
     from fpdf import FPDF
     pdf = FPDF()
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
-    
     logo_file = next((f for f in ["logo.png", "Logo.png", "logo.jpg"] if os.path.exists(f)), None)
     if logo_file:
         pdf.image(logo_file, x=85, y=5, w=40)
         pdf.ln(15)
     else: pdf.ln(5)
-    
     cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
-    
-    # CFA Name chi line tayar karne
     cfa_text = f" | CFA Name: {cfa_name}" if cfa_name.strip() else ""
-
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
     pdf.set_font("Arial", size=9)
     pdf.cell(190, 6, txt=f"Time: {header_info['Time']} | Period: {header_info['Period']}", ln=True, align='C')
-    
     if cfa_name.strip():
         pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}", ln=True, align='C')
     else:
         pdf.cell(190, 6, txt=f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}", ln=True, align='C')
-        
     pdf.ln(5)
-    
-    # Summary Table
     pdf.set_font("Arial", 'B', 9)
     pdf.cell(100, 6, "Transaction Type", border=1, align='L')
     pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
@@ -160,8 +167,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(100, 6, str(row[0]), border=1, align='L')
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
-    
-    # Main Table
     col_widths = [18, 55, 20, 18, 22, 22, 25]
     headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance"]
     pdf.set_font("Arial", 'B', 8)
@@ -169,7 +174,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(col_widths[i], 6, headers[i], border=1, align='C')
     pdf.ln()
     pdf.set_font("Arial", size=8)
-
     for r in final_data:
         if pdf.get_y() > 275: pdf.add_page()
         pdf.cell(col_widths[0], 6, str(r['Date']), border=1, align='C')
@@ -180,7 +184,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
         pdf.ln()
-        
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
@@ -189,10 +192,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(190, 6, f"Authorized Signatory: {cfa_name}", ln=True)
     pdf.ln(5)
     pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
-    
     return bytes(pdf.output(dest='S').encode('latin1'))
 
-# Excel logic
 def get_excel_download(final_data, header_info, summary_info, manual_name="", cfa_name=""):
     output = io.BytesIO()
     cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
@@ -214,24 +215,19 @@ if uploaded_files:
         data, h_info, s_info, err = process_pdf_logic(file)
         if err: st.error(err)
         else:
-            st.success(f"✅ {file.name} वाचून तयार आहे!")
-            
+            st.success(f"✅ {file.name} ready!")
             st.info(f"PDF मधून आलेले कस्टमरचे नाव: **{h_info['CustomerName']}**")
             col_in1, col_in2 = st.columns(2)
             with col_in1:
-                manual_name = st.text_input("Customer Name (जर नाव चुकीचे असेल तर इथे बदला):", key=f"cust_{file.name}")
+                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
             with col_in2:
-                cfa_name = st.text_input("CFA Name (इथे CFA चे नाव टाका):", key=f"cfa_{file.name}")
-            
-            # --- नवीन ऑटोमॅटिक सिस्टीम ---
-            # हे बटण दाबल्यावर माहिती आपसुक सेव्ह होईल आणि डाऊनलोडची बटणे दिसतील.
+                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
             if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"):
                 st.session_state[f"ready_{file.name}"] = True
-                
             if st.session_state.get(f"ready_{file.name}", False):
                 st.write("---")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.download_button("📥 Excel डाऊनलोड करा", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                    st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
                 with col2:
-                    st.download_button("📥 PDF डाऊनलोड करा", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
+                    st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
