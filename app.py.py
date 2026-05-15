@@ -79,28 +79,22 @@ def process_pdf_logic(uploaded_file):
             val = float(re.sub(r'[^\d.]', '', amount_str))
             if val == 0.0: continue
             
-            # --- Document Number extraction सुधारले आहे (6 te 10 digits) ---
             doc_no_match = re.search(r'\b\d{6,10}\b', row_text)
             doc_no = doc_no_match.group(0) if doc_no_match else ""
             
             t_type, s_type = "Other", "Other"
             
-            # 1. TDS Logic
+            # Types Logic
             if ("TDSRECO" in row_upper and doc_no.startswith('000') and is_cr) or ("TDS CREDIT NOTE" in row_upper): 
                 t_type, s_type = "TDS Credit Note", "TDS Credit Note"
             elif "CBOU199" in row_upper: 
                 t_type, s_type = "TECHNICAL BOUNCED", "TECHNICAL BOUNCED"
             elif any(code in row_upper for code in ["CBOU101", "CBOU102", "CBOU110"]): 
                 t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
-                
-            # 2. Reconciliation Logic (Ata doc_no barobar reflect hoil)
             elif "RECONC" in row_upper or (doc_no.startswith('000') and "RECONC" in row_upper): 
                 t_type, s_type = "RECONCILIATION", "RECONCILIATION"
-
-            # 3. Payment Logic
             elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]) or (doc_no.startswith('000') and is_cr): 
                 t_type, s_type = "PAYMENT", "PAYMENT"
-                
             elif "INVOICE" in row_upper:
                 if doc_no.startswith('3'): t_type, s_type = "Credit Note(Brakage Expiry)", "Credit Note(Brakage Expiry)"
                 elif doc_no.startswith('4'): t_type, s_type = "Credit Note(Others)", "Credit Note(Others)"
@@ -108,7 +102,27 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            chq_no = (re.search(r'\b\d{6}\b', row_text).group(0) if re.search(r'\b\d{6}\b', row_text) and re.search(r'\b\d{6}\b', row_text).group(0) != doc_no else "") if s_type == "PAYMENT" else ""
+            # --- नवीन चीक/NEFT/RTGS नंबर काढण्याचे लॉजिक ---
+            chq_no = ""
+            if s_type == "PAYMENT":
+                # १. आधी ६ अंकी साधा चेक नंबर शोधेल
+                chq_match = re.search(r'\b\d{6}\b', row_text)
+                if chq_match and chq_match.group(0) != doc_no: 
+                    chq_no = chq_match.group(0)
+                
+                # २. जर चेक नंबर नाही मिळाला, तर अल्फा-न्युमरिक NEFT/RTGS नंबर शोधेल
+                if not chq_no:
+                    utr_match = re.search(r'\b[A-Z0-9]{8,25}\b', row_upper)
+                    if utr_match and utr_match.group(0) != doc_no and not utr_match.group(0).isalpha(): 
+                        chq_no = utr_match.group(0)
+                        
+                # ३. जर नंबर आणि शब्द चिकटून आले असतील (उदा. NEFT1234567)
+                if not chq_no:
+                    kw_match = re.search(r'(?:CHQ|NEFT|RTGS|DD)[^\w]*([A-Z0-9]{6,25})', row_upper)
+                    if kw_match and kw_match.group(1) != doc_no: 
+                        chq_no = kw_match.group(1)
+            # ------------------------------------------------
+
             debit, credit = (val, 0.0) if not is_cr else (0.0, val)
             running_balance += (debit - credit)
 
@@ -137,7 +151,6 @@ def process_pdf_logic(uploaded_file):
         return final_data, header_info, summary_info, None
     return None, None, None, "Data sapadla nahi."
 
-# --- Baki PDF/Excel functions same ahet ---
 def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="", cfa_name=""):
     from fpdf import FPDF
     pdf = FPDF()
@@ -167,19 +180,22 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(100, 6, str(row[0]), border=1, align='L')
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
-    col_widths = [18, 55, 20, 18, 22, 22, 25]
+    
+    # इथे Cheque No चा कॉलम थोडा मोठा (22) केला आहे जेणेकरून NEFT नंबर बसेल
+    col_widths = [18, 51, 18, 24, 22, 22, 25]
     headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance"]
     pdf.set_font("Arial", 'B', 8)
     for i in range(len(headers)):
         pdf.cell(col_widths[i], 6, headers[i], border=1, align='C')
     pdf.ln()
-    pdf.set_font("Arial", size=8)
+    pdf.set_font("Arial", size=7) # फॉन्ट थोडा बारीक केलाय
     for r in final_data:
         if pdf.get_y() > 275: pdf.add_page()
         pdf.cell(col_widths[0], 6, str(r['Date']), border=1, align='C')
         pdf.cell(col_widths[1], 6, str(r['Type'])[:30], border=1, align='L')
         pdf.cell(col_widths[2], 6, str(r['Doc No']), border=1, align='C')
-        pdf.cell(col_widths[3], 6, str(r['Chq No']), border=1, align='C')
+        # Chq No कॉलम
+        pdf.cell(col_widths[3], 6, str(r['Chq No'])[:16], border=1, align='C')
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
