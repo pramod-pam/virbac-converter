@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Exact Match)")
+st.title("📄 Virbac Account Statement Converter (Date Bug Fixed)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -105,28 +105,29 @@ def process_pdf_logic(uploaded_file):
                 elif doc_no.startswith('8'): t_type, s_type = "TCS Debit Note", "TCS Debit Note"
                 else: t_type, s_type = ("Goods Return Invoice", "Goods Return Invoice") if is_cr else ("Sales Invoice", "Sales Invoice")
 
-            # --- नवीन लॉजिक: शोधण्यासाठी क्लीनर वापरा, पण मूळ शब्द जसाच्या तसा घ्या ---
+            # --- तारखेचा प्रॉब्लेम फिक्स ---
             chq_no = ""
             tokens = row_text.split()
             
             for token in tokens:
-                # फक्त ओळखण्यासाठी आपण फालतू चिन्हे काढतोय
+                # १. जर हा शब्द तारीख असेल (उदा. 06/02/26) किंवा मूळ तारीख असेल, तर त्याला सोडून द्या
+                if re.match(r'\d{2}/\d{2}/\d{2}', token) or token == date:
+                    continue
+                
                 clean_token = re.sub(r'[^A-Za-z0-9]', '', token)
                 
                 if not clean_token or clean_token == doc_no:
                     continue
                 
-                # १. जर ६ अंकी चेक नंबर असेल (उदा. '091659)
                 if clean_token.isdigit() and len(clean_token) == 6:
-                    chq_no = token  # इथे आपण मूळ (Original) शब्द उचलत आहोत!
+                    chq_no = token  
                     break
-                # २. जर मोठा UTR/NEFT नंबर असेल
                 elif re.match(r'^[A-Za-z0-9]{8,25}$', clean_token):
                     ignore_words = ["PAYMENT", "RECONC", "INVOICE", "OPENING", "BALANCE", "CLOSING", "TECHNICAL", "BOUNCED", "NON"]
                     if clean_token.upper() not in ignore_words and not clean_token.upper().startswith("CBOU"):
-                        chq_no = token  # इथेही मूळ शब्द जसाच्या तसा!
+                        chq_no = token  
                         break
-            # -------------------------------------------------------------------------
+            # -------------------------------
 
             debit, credit = (val, 0.0) if not is_cr else (0.0, val)
             running_balance += (debit - credit)
@@ -145,24 +146,20 @@ def process_pdf_logic(uploaded_file):
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2)})
 
     if final_data:
-        # --- Auto-Match Logic: Payment मधून मूळ चिन्हांसकट नंबर उचलून Bounced मध्ये टाकणे ---
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
                 b_doc = final_data[i]["Doc No"]
                 
-                # मागे जाऊन पेमेंट शोधा
                 for j in range(i - 1, -1, -1):
                     if final_data[j]["Type"] == "PAYMENT":
                         p_amt = final_data[j]["Credit"] if final_data[j]["Credit"] != "" else final_data[j]["Debit"]
                         p_doc = final_data[j]["Doc No"]
                         
-                        # जर डॉक्युमेंट नंबर किंवा रक्कम मॅच झाली
                         if (b_amt != "" and b_amt == p_amt) or (b_doc != "" and b_doc == p_doc):
                             if final_data[j]["Chq No"]:
-                                final_data[i]["Chq No"] = final_data[j]["Chq No"]  # जसाच्या तसा कॉपी होईल
+                                final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
-        # ---------------------------------------------------------------------
 
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2)})
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
