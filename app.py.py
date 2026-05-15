@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Global Auto-Total)")
+st.title("📄 Virbac Account Statement Converter (Final Remarks Format)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -66,7 +66,7 @@ def process_pdf_logic(uploaded_file):
                 opening_balance = val
                 running_balance = -val if is_cr else val
                 found_opening = True
-                final_data.append({"Date": "", "Type": "OPENING BAL", "Doc No": "", "Chq No": "", "Debit": val if not is_cr else "", "Credit": val if is_cr else "", "Balance": round(running_balance, 2)})
+                final_data.append({"Date": "", "Type": "OPENING BAL", "Doc No": "", "Chq No": "", "Debit": val if not is_cr else "", "Credit": val if is_cr else "", "Balance": round(running_balance, 2), "Remarks": ""})
             continue
 
         date_match = re.search(r'\b(\d{2}/\d{2}/\d{2})\b', row_text)
@@ -83,6 +83,7 @@ def process_pdf_logic(uploaded_file):
             doc_no = doc_no_match.group(0) if doc_no_match else ""
             
             t_type, s_type = "Other", "Other"
+            remarks = ""
             
             if ("TDSRECO" in row_upper and doc_no.startswith('000') and is_cr) or ("TDS CREDIT NOTE" in row_upper): 
                 t_type, s_type = "TDS Credit Note", "TDS Credit Note"
@@ -91,11 +92,9 @@ def process_pdf_logic(uploaded_file):
             elif any(code in row_upper for code in ["CBOU101", "CBOU102", "CBOU110"]): 
                 t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
             elif "RECONC" in row_upper: 
-                s_type = "RECONCILIATION"
+                t_type, s_type = "RECONCILIATION", "RECONCILIATION"
                 if doc_no:
-                    t_type = f"RECONCILIATION (Adj: {doc_no})"
-                else:
-                    t_type = "RECONCILIATION"
+                    remarks = f"Adj against Doc: {doc_no}"
             elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]) or (doc_no.startswith('000') and is_cr): 
                 t_type, s_type = "PAYMENT", "PAYMENT"
             elif "INVOICE" in row_upper:
@@ -141,10 +140,11 @@ def process_pdf_logic(uploaded_file):
             elif s_type == "TDS Credit Note": tds += val
             elif s_type == "TECHNICAL BOUNCED": tech_b += val
             elif s_type == "NON TECHNICAL BOUNCED": n_tech_b += val
-            final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2)})
+            
+            final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2), "Remarks": remarks})
 
     if final_data:
-        # 1. Bounced Cheque Logic
+        # 1. Bounced Cheque Match
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
@@ -160,12 +160,10 @@ def process_pdf_logic(uploaded_file):
                                 final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
         
-        # 2. --- NEW LOGIC: Global Auto-Total (Statement wise) ---
+        # 2. --- NEW LOGIC: Perfect Remarks for Payments ---
         chq_stats = {}
-        # Pahile purna PDF madhle same cheque no shoda (Date condition kadhli ahe)
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
-                # Logic: Fkt Chq No var group kara
                 key = r["Chq No"]
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 if key not in chq_stats:
@@ -173,16 +171,24 @@ def process_pdf_logic(uploaded_file):
                 chq_stats[key]['sum'] += amt
                 chq_stats[key]['count'] += 1
 
-        # Mag jithe jithe toh chq no ahe titha total dakva
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
+                amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                
+                total_formatted = f"{int(chq_stats[key]['sum']):,}"
+                adj_formatted = f"{int(amt):,}"
+                
+                # जर एकापेक्षा जास्त तुकडे असतील (Split Payments)
                 if chq_stats[key]['count'] > 1:
-                    total_formatted = f"{int(chq_stats[key]['sum']):,}"
-                    r["Type"] = f"PAYMENT (Total: {total_formatted})"
-        # ----------------------------------------------------------------------
+                    r["Type"] = "PAYMENT (Split Chq)"
+                    r["Remarks"] = f"Inv:{r['Doc No']} | Adj:{adj_formatted} | Tot Adj(Chq):{total_formatted} | Chq:{key}"
+                # जर एकच पेमेंट असेल
+                else:
+                    r["Remarks"] = f"Inv:{r['Doc No']} | Adj:{adj_formatted} | Chq:{key}"
+        # ----------------------------------------------------------
 
-        final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2)})
+        final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
         summary_info = [
             ("OPENING BAL", opening_balance), ("Sales Invoice", s_inv), ("PAYMENT", pay), ("RECONCILIATION", reco),
@@ -223,23 +229,26 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    col_widths = [18, 48, 17, 26, 22, 22, 25] 
-    headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance"]
-    pdf.set_font("Arial", 'B', 8)
+    col_widths = [14, 25, 16, 16, 17, 17, 18, 67] 
+    headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance", "Remarks"]
+    pdf.set_font("Arial", 'B', 7)
     for i in range(len(headers)):
         pdf.cell(col_widths[i], 6, headers[i], border=1, align='C')
     pdf.ln()
-    pdf.set_font("Arial", size=7) 
+    pdf.set_font("Arial", size=6) 
     for r in final_data:
         if pdf.get_y() > 275: pdf.add_page()
         pdf.cell(col_widths[0], 6, str(r['Date']), border=1, align='C')
-        pdf.cell(col_widths[1], 6, str(r['Type'])[:40], border=1, align='L')
+        pdf.cell(col_widths[1], 6, str(r['Type'])[:25], border=1, align='L')
         pdf.cell(col_widths[2], 6, str(r['Doc No']), border=1, align='C')
-        pdf.cell(col_widths[3], 6, str(r['Chq No'])[:20], border=1, align='C')
+        pdf.cell(col_widths[3], 6, str(r['Chq No'])[:16], border=1, align='C')
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
+        
+        pdf.cell(col_widths[7], 6, str(r['Remarks'])[:65], border=1, align='L')
         pdf.ln()
+        
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
