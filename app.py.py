@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Final Remarks Format)")
+st.title("📄 Virbac Account Statement Converter (Smart Summary Format)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -136,7 +136,7 @@ def process_pdf_logic(uploaded_file):
             elif s_type == "Credit Note(Brakage Expiry)": c_brk += val
             elif s_type == "Goods Return Invoice": g_ret += val
             elif s_type == "Debit Note": d_not += val
-            elif s_type == "TCS Debit Note": tcs += val
+            elif s_type == "TCS Debit Note", "TCS Debit Note": tcs += val
             elif s_type == "TDS Credit Note": tds += val
             elif s_type == "TECHNICAL BOUNCED": tech_b += val
             elif s_type == "NON TECHNICAL BOUNCED": n_tech_b += val
@@ -160,33 +160,47 @@ def process_pdf_logic(uploaded_file):
                                 final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
         
-        # 2. --- NEW LOGIC: Perfect Remarks for Payments ---
+        # 2. Smart Summary for Split Payments Logic
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 if key not in chq_stats:
-                    chq_stats[key] = {'sum': 0.0, 'count': 0}
+                    chq_stats[key] = {'sum': 0.0, 'count': 0, 'seen': 0}
                 chq_stats[key]['sum'] += amt
                 chq_stats[key]['count'] += 1
 
+        new_final_data = []
         for r in final_data:
+            new_final_data.append(r)
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
-                
-                total_formatted = f"{int(chq_stats[key]['sum']):,}"
                 adj_formatted = f"{int(amt):,}"
+                total_formatted = f"{int(chq_stats[key]['sum']):,}"
                 
-                # जर एकापेक्षा जास्त तुकडे असतील (Split Payments)
                 if chq_stats[key]['count'] > 1:
-                    r["Type"] = "PAYMENT (Split Chq)"
-                    r["Remarks"] = f"Inv:{r['Doc No']} | Adj:{adj_formatted} | Tot Adj(Chq):{total_formatted} | Chq:{key}"
-                # जर एकच पेमेंट असेल
+                    r["Type"] = "PAYMENT"
+                    r["Remarks"] = f"Inv: {r['Doc No']} | Adj: {adj_formatted}"
+                    chq_stats[key]['seen'] += 1
+                    
+                    if chq_stats[key]['seen'] == chq_stats[key]['count']:
+                        summary_row = {
+                            "Date": "", 
+                            "Type": "👉 CHQ SUMMARY", 
+                            "Doc No": "", 
+                            "Chq No": key, 
+                            "Debit": "", 
+                            "Credit": "", 
+                            "Balance": "", 
+                            "Remarks": f"Total Adj: {total_formatted} | Chq Amt: {total_formatted}"
+                        }
+                        new_final_data.append(summary_row)
                 else:
-                    r["Remarks"] = f"Inv:{r['Doc No']} | Adj:{adj_formatted} | Chq:{key}"
-        # ----------------------------------------------------------
+                    r["Remarks"] = f"Inv: {r['Doc No']} | Adj: {adj_formatted}"
+                    
+        final_data = new_final_data
 
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
@@ -238,6 +252,12 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.set_font("Arial", size=6) 
     for r in final_data:
         if pdf.get_y() > 275: pdf.add_page()
+        
+        if "CHQ SUMMARY" in str(r['Type']):
+            pdf.set_font("Arial", 'B', 6)
+        else:
+            pdf.set_font("Arial", size=6)
+            
         pdf.cell(col_widths[0], 6, str(r['Date']), border=1, align='C')
         pdf.cell(col_widths[1], 6, str(r['Type'])[:25], border=1, align='L')
         pdf.cell(col_widths[2], 6, str(r['Doc No']), border=1, align='C')
@@ -245,7 +265,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
-        
         pdf.cell(col_widths[7], 6, str(r['Remarks'])[:65], border=1, align='L')
         pdf.ln()
         
