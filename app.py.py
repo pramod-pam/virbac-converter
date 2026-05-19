@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Clean Summary Format)")
+st.title("📄 Virbac Account Statement Converter (Smart Balance Tracker)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -93,8 +93,6 @@ def process_pdf_logic(uploaded_file):
                 t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
             elif "RECONC" in row_upper: 
                 t_type, s_type = "RECONCILIATION", "RECONCILIATION"
-                if doc_no:
-                    remarks = f"Adj against Doc: {doc_no}"
             elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]) or (doc_no.startswith('000') and is_cr): 
                 t_type, s_type = "PAYMENT", "PAYMENT"
             elif "INVOICE" in row_upper:
@@ -160,7 +158,16 @@ def process_pdf_logic(uploaded_file):
                                 final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
         
-        # 2. Clean Summary Logic (तुम्ही सांगितल्याप्रमाणे प्रत्येक ओळीतून चेक नंबर काढला आहे)
+        # 2. Extract Original Invoice Amounts (मूळ बिलाची रक्कम शोधणे)
+        doc_amounts = {}
+        for r in final_data:
+            if r["Type"] not in ["PAYMENT", "RECONCILIATION", "OPENING BAL", "CLOSING BAL"] and "BOUNCED" not in r["Type"]:
+                if r["Doc No"]:
+                    amt = r["Debit"] if r["Debit"] != "" else r["Credit"]
+                    if amt != "":
+                        doc_amounts[r["Doc No"]] = float(amt)
+
+        # 3. Track Split Cheques
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
@@ -171,38 +178,79 @@ def process_pdf_logic(uploaded_file):
                 chq_stats[key]['sum'] += amt
                 chq_stats[key]['count'] += 1
 
+        # 4. --- NEW LOGIC: Smart Balance Tracker for Invoices ---
+        doc_paid_tracker = {}
         new_final_data = []
+        
         for r in final_data:
-            new_final_data.append(r)
-            if "PAYMENT" in r["Type"] and r["Chq No"]:
-                key = r["Chq No"]
+            doc_no = r.get("Doc No", "")
+            is_adj = ("PAYMENT" in r["Type"] or "RECONCILIATION" in r["Type"]) and doc_no != ""
+            
+            pending_str = ""
+            orig_amt_str = ""
+            adj_formatted = ""
+            
+            # जर पेमेंट किंवा ॲडजस्टमेंट असेल, तर त्याचा हिशोब लावणे
+            if is_adj:
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                doc_paid_tracker[doc_no] = doc_paid_tracker.get(doc_no, 0.0) + amt
                 adj_formatted = f"{int(amt):,}"
-                total_formatted = f"{int(chq_stats[key]['sum']):,}"
                 
-                # जर एकापेक्षा जास्त तुकडे असतील 
-                if chq_stats[key]['count'] > 1:
-                    r["Type"] = "PAYMENT"
-                    r["Remarks"] = f"Inv: {r['Doc No']} | Adj: {adj_formatted}"
-                    r["Chq No"] = ""  # <--- इथून मधल्या ओळींमधील चेक नंबर पुसून टाकला
-                    chq_stats[key]['seen'] += 1
+                orig_amt = doc_amounts.get(doc_no, None)
+                if orig_amt:
+                    orig_amt_str = f" | Amt: {int(orig_amt):,}"
+                    pending = orig_amt - doc_paid_tracker[doc_no]
                     
-                    # जर ही शेवटची ओळ असेल, तर फक्त खाली 'Summary' मध्ये चेक नंबर आणि टोटल दाखवा
-                    if chq_stats[key]['seen'] == chq_stats[key]['count']:
-                        summary_row = {
-                            "Date": "", 
-                            "Type": "-> CHQ SUMMARY", 
-                            "Doc No": "", 
-                            "Chq No": key,  # <--- चेक नंबर फक्त इथे दिसेल!
-                            "Debit": "", 
-                            "Credit": "", 
-                            "Balance": "", 
-                            "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq Amt: {total_formatted}"
-                        }
-                        new_final_data.append(summary_row)
+                    # जर बॅलन्स २ रुपयांपेक्षा कमी असेल तर क्लिअर समजणे
+                    if pending <= 2:  
+                        pending_str = " | CLEARED"
+                    else:
+                        pending_str = f" | Bal: {int(pending):,}"
+
+            new_final_data.append(r)
+            
+            # आता 'Remarks' कॉलममध्ये हा नवीन फॉरमॅट छापणे
+            if "PAYMENT" in r["Type"]:
+                if r["Chq No"]:
+                    key = r["Chq No"]
+                    total_formatted = f"{int(chq_stats[key]['sum']):,}"
+                    
+                    if chq_stats[key]['count'] > 1:
+                        r["Type"] = "PAYMENT"
+                        r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{pending_str}"
+                        r["Chq No"] = ""  
+                        chq_stats[key]['seen'] += 1
+                        
+                        if chq_stats[key]['seen'] == chq_stats[key]['count']:
+                            summary_row = {
+                                "Date": "", 
+                                "Type": "-> CHQ SUMMARY", 
+                                "Doc No": "", 
+                                "Chq No": key,  
+                                "Debit": "", 
+                                "Credit": "", 
+                                "Balance": "", 
+                                "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq Amt: {total_formatted}"
+                            }
+                            new_final_data.append(summary_row)
+                    else:
+                        if doc_no:
+                            r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{pending_str}"
                 else:
-                    r["Remarks"] = f"Inv: {r['Doc No']} | Adj: {adj_formatted}"
-                    
+                    if doc_no:
+                        r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{pending_str}"
+                        
+            elif "RECONCILIATION" in r["Type"] and doc_no != "":
+                # डॉक्युमेंटचे योग्य नाव देणे
+                doc_type_str = "Inv"
+                if doc_no.startswith('3') or doc_no.startswith('4'): doc_type_str = "CR Note"
+                elif doc_no.startswith('5'): doc_type_str = "DR Note"
+                elif doc_no.startswith('8'): doc_type_str = "TCS Note"
+                elif doc_no.startswith('000'): doc_type_str = "Advance"
+                
+                r["Remarks"] = f"{doc_type_str}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{pending_str}"
+        # -------------------------------------------------------------------
+
         final_data = new_final_data
 
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
@@ -222,7 +270,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
     
-    # Safe encoding to avoid any app crashes
     def safe_str(s):
         return str(s).encode('latin1', 'ignore').decode('latin1')
         
@@ -251,8 +298,9 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    col_widths = [14, 25, 16, 16, 17, 17, 18, 67] 
+    col_widths = [14, 32, 15, 15, 16, 16, 17, 65] 
     headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance", "Remarks"]
+    
     pdf.set_font("Arial", 'B', 7)
     for i in range(len(headers)):
         pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C')
@@ -260,15 +308,20 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     
     pdf.set_font("Arial", size=6) 
     for r in final_data:
-        if pdf.get_y() > 275: pdf.add_page()
-        
+        if pdf.get_y() > 275: 
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 7)
+            for i in range(len(headers)):
+                pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C')
+            pdf.ln()
+            
         if "CHQ SUMMARY" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
         else:
             pdf.set_font("Arial", size=6)
             
         pdf.cell(col_widths[0], 6, safe_str(r['Date']), border=1, align='C')
-        pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:25], border=1, align='L')
+        pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], border=1, align='L')
         pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), border=1, align='C')
         pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], border=1, align='C')
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
@@ -280,48 +333,3 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
-    pdf.ln(5)
-    if cfa_name.strip():
-        pdf.cell(190, 6, safe_str(f"Authorized Signatory: {cfa_name}"), ln=True)
-    pdf.ln(5)
-    pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
-    
-    return bytes(pdf.output(dest='S').encode('latin1', 'ignore'))
-
-def get_excel_download(final_data, header_info, summary_info, manual_name="", cfa_name=""):
-    output = io.BytesIO()
-    cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        pd.DataFrame([
-            ["Report Time:", header_info["Time"]], 
-            ["Heading:", "STATEMENT OF ACCOUNT"], 
-            ["Period:", header_info["Period"]], 
-            ["Customer No:", header_info["CustomerNo"]],
-            ["Customer Name:", cust_name],
-            ["CFA Name:", cfa_name]
-        ]).to_excel(writer, sheet_name='Statement', index=False, header=False)
-        pd.DataFrame(summary_info, columns=["TYPE", "AMOUNT"]).to_excel(writer, sheet_name='Statement', index=False, startrow=8)
-        pd.DataFrame(final_data).to_excel(writer, sheet_name='Statement', index=False, startrow=24)
-    return output.getvalue()
-
-if uploaded_files:
-    for file in uploaded_files:
-        data, h_info, s_info, err = process_pdf_logic(file)
-        if err: st.error(err)
-        else:
-            st.success(f"✅ {file.name} ready!")
-            st.info(f"PDF मधून आलेले CUSTOMERचे नाव: **{h_info['CustomerName']}**")
-            col_in1, col_in2 = st.columns(2)
-            with col_in1:
-                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
-            with col_in2:
-                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
-            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"):
-                st.session_state[f"ready_{file.name}"] = True
-            if st.session_state.get(f"ready_{file.name}", False):
-                st.write("---")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
-                with col2:
-                    st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
