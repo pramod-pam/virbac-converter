@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (ERP Layout)")
+st.title("📄 Virbac Account Statement Converter (Polished ERP Layout)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -179,62 +179,82 @@ def process_pdf_logic(uploaded_file):
                 chq_stats[key]['count'] += 1
                 chq_stats[key]['last_bal'] = r['Balance'] 
 
-        new_final_data = []
-        for r in final_data:
-            if "PAYMENT" in r["Type"]:
-                doc_no = r.get("Doc No", "")
-                amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+        # --- Grouping Logic to prevent interruptions ---
+        grouped_data = []
+        skip_indices = set()
+        
+        for i, r in enumerate(final_data):
+            if i in skip_indices:
+                continue
                 
-                status_tag = ""
-                if doc_no and doc_no in inv_balances:
-                    inv_balances[doc_no] -= amt
-                    pending = inv_balances[doc_no]
-                    status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
+            if "PAYMENT" in r["Type"] and r["Chq No"]:
+                key = r["Chq No"]
                 
-                orig_amt = doc_amounts.get(doc_no, None)
-                orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
-                adj_formatted = f"{int(amt):,}"
-                
-                doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
-                
-                if r["Chq No"]:
-                    key = r["Chq No"]
-                    
-                    if chq_stats[key]['count'] > 1:
-                        if chq_stats[key]['seen'] == 0:
-                            total_c = chq_stats[key]['total_c']
-                            total_d = chq_stats[key]['total_d']
-                            net_amt = abs(total_c - total_d)
-                            
-                            new_final_data.append({
-                                "Date": chq_stats[key]['date'], 
-                                "Type": "PAYMENT (Total)", 
-                                "Doc No": "", 
-                                "Chq No": key,  
-                                "Debit": total_d if total_d > 0 else "", 
-                                "Credit": total_c if total_c > 0 else "", 
-                                "Balance": chq_stats[key]['last_bal'], 
-                                "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
-                            })
+                if chq_stats[key]['count'] > 1:
+                    if chq_stats[key]['seen'] == 0:
+                        total_c = chq_stats[key]['total_c']
+                        total_d = chq_stats[key]['total_d']
+                        net_amt = abs(total_c - total_d)
                         
-                        chq_stats[key]['seen'] += 1
-                        new_final_data.append({
-                            "Date": "", 
-                            "Type": f"↳ Adj {doc_type}", 
-                            "Doc No": doc_no, 
-                            "Chq No": "",  
-                            "Debit": "", 
-                            "Credit": "", 
-                            "Balance": "", 
-                            "Remarks": f"Applied: {adj_formatted}{orig_amt_str}{status_tag}"
+                        grouped_data.append({
+                            "Date": chq_stats[key]['date'], 
+                            "Type": "PAYMENT (Total)", 
+                            "Doc No": "", 
+                            "Chq No": key,  
+                            "Debit": total_d if total_d > 0 else "", 
+                            "Credit": total_c if total_c > 0 else "", 
+                            "Balance": chq_stats[key]['last_bal'], 
+                            "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
                         })
-                    else:
-                        if doc_no: r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                        new_final_data.append(r)
+                        
+                    # Find all child rows for this Chq No to keep them together
+                    for j in range(i, len(final_data)):
+                        if final_data[j]["Chq No"] == key and "PAYMENT" in final_data[j]["Type"]:
+                            child_r = final_data[j]
+                            doc_no = child_r.get("Doc No", "")
+                            amt = float(child_r["Credit"]) if child_r["Credit"] != "" else (float(child_r["Debit"]) if child_r["Debit"] != "" else 0.0)
+                            
+                            status_tag = ""
+                            if doc_no and doc_no in inv_balances:
+                                inv_balances[doc_no] -= amt
+                                pending = inv_balances[doc_no]
+                                status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
+                            
+                            orig_amt = doc_amounts.get(doc_no, None)
+                            orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                            adj_formatted = f"{int(amt):,}"
+                            doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                            
+                            # Indented Type Name
+                            grouped_data.append({
+                                "Date": "", 
+                                "Type": f"    -> Adj {doc_type}", 
+                                "Doc No": doc_no, 
+                                "Chq No": "",  
+                                "Debit": "", 
+                                "Credit": "", 
+                                "Balance": "", 
+                                "Remarks": f"Applied: {adj_formatted}{orig_amt_str}{status_tag}"
+                            })
+                            skip_indices.add(j)
+                            chq_stats[key]['seen'] += 1
                 else:
-                    if doc_no: r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                    new_final_data.append(r)
-                
+                    # Single payment
+                    doc_no = r.get("Doc No", "")
+                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                    status_tag = ""
+                    if doc_no and doc_no in inv_balances:
+                        inv_balances[doc_no] -= amt
+                        pending = inv_balances[doc_no]
+                        status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
+                    orig_amt = doc_amounts.get(doc_no, None)
+                    orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                    adj_formatted = f"{int(amt):,}"
+                    doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                    
+                    r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                    grouped_data.append(r)
+                    
             elif "RECONCILIATION" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 if doc_no:
@@ -249,11 +269,11 @@ def process_pdf_logic(uploaded_file):
                     orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                     doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                     r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                new_final_data.append(r)
+                grouped_data.append(r)
             else:
-                new_final_data.append(r)
+                grouped_data.append(r)
 
-        final_data = new_final_data
+        final_data = grouped_data
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         
         pending_invoices = []
@@ -347,17 +367,21 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         y_start = pdf.get_y()
         curr_x = 10
         
+        pdf.set_text_color(0, 0, 0) # Reset color to black
+        
         fill_row = False
         if "PAYMENT (Total)" in str(r['Type']) or "CLOSING BAL" in str(r['Type']):
             pdf.set_fill_color(240, 245, 250)  
             fill_row = True
-            
-        style = 'DF' if fill_row else 'D'
-        
-        if "CLOSING BAL" in str(r['Type']) or "PAYMENT (Total)" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
+        elif "-> Adj" in str(r['Type']):
+            # Italic and Gray Color for Child Rows
+            pdf.set_font("Arial", 'I', 6)
+            pdf.set_text_color(90, 90, 90) 
         else:
             pdf.set_font("Arial", size=6)
+            
+        style = 'DF' if fill_row else 'D'
             
         temp_x = curr_x
         for w in col_widths:
@@ -398,6 +422,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.set_y(y_start + row_height)
         
     if pending_invoices:
+        pdf.set_text_color(0, 0, 0)
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 8)
         pdf.set_fill_color(255, 204, 204) 
