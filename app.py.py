@@ -457,4 +457,53 @@ def get_excel_download(final_data, header_info, summary_info, pending_invoices, 
         excel_data.append({
             "Date": r["Date"],
             "Type": r["Type"],
-            "Doc No": r["Doc No
+            "Doc No": r["Doc No"],
+            "Chq/NEFT No": r["Chq No"],
+            "Billed Amt (Dr)": r["Debit"],
+            "Paid Amt (Cr)": r["Credit"],
+            "Balance": r["Balance"],
+            "Remarks": r["Remarks"]
+        })
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        pd.DataFrame([
+            ["Report Time:", header_info["Time"]], 
+            ["Heading:", "STATEMENT OF ACCOUNT"], 
+            ["Period:", header_info["Period"]], 
+            ["Customer No:", header_info["CustomerNo"]],
+            ["Customer Name:", cust_name],
+            ["CFA Name:", cfa_name]
+        ]).to_excel(writer, sheet_name='Statement', index=False, header=False)
+        
+        pd.DataFrame(summary_info, columns=["TYPE", "AMOUNT"]).to_excel(writer, sheet_name='Statement', index=False, startrow=8)
+        
+        pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=24)
+        
+        if pending_invoices:
+            start_row_pending = 24 + len(excel_data) + 3
+            pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
+            pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
+
+    return output.getvalue()
+
+if uploaded_files:
+    for file in uploaded_files:
+        data, h_info, s_info, pending_inv, err = process_pdf_logic(file)
+        if err: st.error(err)
+        else:
+            st.success(f"✅ {file.name} ready!")
+            st.info(f"PDF मधून आलेले CUSTOMERचे नाव: **{h_info['CustomerName']}**")
+            col_in1, col_in2 = st.columns(2)
+            with col_in1:
+                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
+            with col_in2:
+                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
+            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"):
+                st.session_state[f"ready_{file.name}"] = True
+            if st.session_state.get(f"ready_{file.name}", False):
+                st.write("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                with col2:
+                    st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
