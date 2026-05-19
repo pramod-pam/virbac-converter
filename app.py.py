@@ -5,11 +5,12 @@ import re
 import datetime
 import io
 import os
+import textwrap  # <-- नवीन Text Wrapping सिस्टीमसाठी
 
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Clean UI Summary)")
+st.title("📄 Virbac Account Statement Converter (Auto-Wrap Remarks)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -345,45 +346,96 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C')
     pdf.ln()
     
-    pdf.set_font("Arial", size=6) 
     for r in final_data:
-        if pdf.get_y() > 275: 
+        # --- NEW: Text Wrapping Logic ---
+        remarks_text = safe_str(r['Remarks'])
+        # 65mm च्या कॉलममध्ये 52 अक्षरे अगदी आरामात बसतात (त्यापुढचे शब्द खालच्या ओळीवर जातील)
+        wrapped_remarks = textwrap.wrap(remarks_text, width=52)
+        if not wrapped_remarks:
+            wrapped_remarks = [""]
+            
+        lines = len(wrapped_remarks)
+        row_height = lines * 6  # ओळींची संख्या * 6 (प्रत्येक ओळीची उंची)
+        
+        # जर पान संपत आले असेल, तर नवीन पान घ्या
+        if pdf.get_y() + row_height > 275: 
             pdf.add_page()
             pdf.set_font("Arial", 'B', 7)
             for i in range(len(headers)):
                 pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C')
             pdf.ln()
             
-        # --- नवीन 'Merged Cell' लॉजिक CHQ SUMMARY साठी ---
+        y_start = pdf.get_y()
+        curr_x = 10
+        
         if "CHQ SUMMARY" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
             
-            # १. Date कॉलम (रिकामा)
-            pdf.cell(col_widths[0], 6, "", border='LTB', align='C')
+            # --- Dynamic Borders for CHQ SUMMARY ---
+            pdf.rect(curr_x, y_start, col_widths[0], row_height)
+            pdf.rect(curr_x + col_widths[0], y_start, col_widths[1], row_height)
+            merged_w = sum(col_widths[2:7])
+            pdf.rect(curr_x + col_widths[0] + col_widths[1], y_start, merged_w, row_height)
+            pdf.rect(curr_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height)
             
-            # २. Type कॉलम (-> CHQ SUMMARY)
-            pdf.cell(col_widths[1], 6, safe_str(r['Type']), border='TB', align='L')
+            # Content Printing
+            pdf.set_xy(curr_x + col_widths[0], y_start)
+            pdf.cell(col_widths[1], 6, safe_str(r['Type']), align='L')  # Top aligned
             
-            # ३. मधले ५ कॉलम्स एकत्र (Merge: Doc No + Chq No + Debit + Credit + Balance)
-            merged_width = col_widths[2] + col_widths[3] + col_widths[4] + col_widths[5] + col_widths[6]
-            pdf.cell(merged_width, 6, safe_str(r['Chq No']), border='TB', align='C')
+            pdf.set_xy(curr_x + col_widths[0] + col_widths[1], y_start)
+            pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
             
-            # ४. Remarks कॉलम
-            pdf.cell(col_widths[7], 6, safe_str(r['Remarks']), border='RTB', align='L')
-            pdf.ln()
+            curr_x_remarks = curr_x + col_widths[0] + col_widths[1] + merged_w
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(curr_x_remarks, y_start + (i * 6))
+                pdf.cell(col_widths[7], 6, line, align='L')
+                
+            pdf.set_y(y_start + row_height)
             
-        # ----------------------------------------------------
         else:
             pdf.set_font("Arial", size=6)
-            pdf.cell(col_widths[0], 6, safe_str(r['Date']), border=1, align='C')
-            pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], border=1, align='L')
-            pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), border=1, align='C')
-            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], border=1, align='C')
-            pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
-            pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
-            pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
-            pdf.cell(col_widths[7], 6, safe_str(r['Remarks'])[:72], border=1, align='L')
-            pdf.ln()
+            
+            # --- Dynamic Borders for standard rows ---
+            temp_x = curr_x
+            for w in col_widths:
+                pdf.rect(temp_x, y_start, w, row_height)
+                temp_x += w
+                
+            # Content Printing (Top aligned for all cells)
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
+            curr_x += col_widths[0]
+            
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
+            curr_x += col_widths[1]
+            
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C')
+            curr_x += col_widths[2]
+            
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], align='C')
+            curr_x += col_widths[3]
+            
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R')
+            curr_x += col_widths[4]
+            
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R')
+            curr_x += col_widths[5]
+            
+            pdf.set_xy(curr_x, y_start)
+            pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R')
+            curr_x += col_widths[6]
+            
+            # Multi-line Remarks Printing
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(curr_x, y_start + (i * 6))
+                pdf.cell(col_widths[7], 6, line, align='L')
+                
+            pdf.set_y(y_start + row_height)
         
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
