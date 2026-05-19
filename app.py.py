@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Net NEFT Fixed)")
+st.title("📄 Virbac Account Statement Converter (ERP Layout)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -166,38 +166,21 @@ def process_pdf_logic(uploaded_file):
 
         inv_balances = {k: v for k, v in doc_amounts.items()}
 
-        # --- नवीन Net Amount Logic (Credit vs Debit calculation) ---
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
                 c_amt = float(r["Credit"]) if r["Credit"] != "" else 0.0
                 d_amt = float(r["Debit"]) if r["Debit"] != "" else 0.0
-                
                 if key not in chq_stats:
-                    chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0}
-                
+                    chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0, 'last_bal': 0.0, 'date': r['Date']}
                 chq_stats[key]['total_c'] += c_amt
                 chq_stats[key]['total_d'] += d_amt
                 chq_stats[key]['count'] += 1
-
-        adj_tracking = {}
-        for r in final_data:
-            if "PAYMENT" in r["Type"] or "RECONCILIATION" in r["Type"]:
-                doc = r.get("Doc No", "")
-                if doc:
-                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
-                    chq = r["Chq No"]
-                    date = r["Date"]
-                    if doc not in adj_tracking:
-                        adj_tracking[doc] = {'total_adj': 0.0, 'chqs': set(), 'dates': set()}
-                    adj_tracking[doc]['total_adj'] += amt
-                    if chq: adj_tracking[doc]['chqs'].add(chq)
-                    if date: adj_tracking[doc]['dates'].add(date)
+                chq_stats[key]['last_bal'] = r['Balance'] 
 
         new_final_data = []
         for r in final_data:
-            new_final_data.append(r)
             if "PAYMENT" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
@@ -208,40 +191,49 @@ def process_pdf_logic(uploaded_file):
                     pending = inv_balances[doc_no]
                     status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
                 
-                adj_formatted = f"{int(amt):,}"
                 orig_amt = doc_amounts.get(doc_no, None)
                 orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                adj_formatted = f"{int(amt):,}"
                 
-                # Payment chya oli madhe doc_no nusar Adv/Inv takne
                 doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                 
                 if r["Chq No"]:
                     key = r["Chq No"]
                     
-                    # Net Calculation apply kela ahe
-                    total_c = chq_stats[key]['total_c']
-                    total_d = chq_stats[key]['total_d']
-                    net_amt = abs(total_c - total_d)
-                    total_adj = total_c if total_c > total_d else total_d
-                    
-                    total_adj_formatted = f"{int(total_adj):,}"
-                    net_amt_formatted = f"{int(net_amt):,}"
-                    
                     if chq_stats[key]['count'] > 1:
-                        r["Type"] = "PAYMENT"
-                        r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                        chq_stats[key]['seen'] += 1
-                        
-                        if chq_stats[key]['seen'] == chq_stats[key]['count']:
+                        if chq_stats[key]['seen'] == 0:
+                            total_c = chq_stats[key]['total_c']
+                            total_d = chq_stats[key]['total_d']
+                            net_amt = abs(total_c - total_d)
+                            
                             new_final_data.append({
-                                "Date": "", "Type": "-> CHQ SUMMARY", "Doc No": "", "Chq No": key,  
-                                "Debit": "", "Credit": "", "Balance": "", 
-                                "Remarks": f"Total Inv Adj: {total_adj_formatted} | Net Chq/NEFT Amt: {net_amt_formatted}"
+                                "Date": chq_stats[key]['date'], 
+                                "Type": "PAYMENT (Total)", 
+                                "Doc No": "", 
+                                "Chq No": key,  
+                                "Debit": total_d if total_d > 0 else "", 
+                                "Credit": total_c if total_c > 0 else "", 
+                                "Balance": chq_stats[key]['last_bal'], 
+                                "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
                             })
+                        
+                        chq_stats[key]['seen'] += 1
+                        new_final_data.append({
+                            "Date": "", 
+                            "Type": f"↳ Adj {doc_type}", 
+                            "Doc No": doc_no, 
+                            "Chq No": "",  
+                            "Debit": "", 
+                            "Credit": "", 
+                            "Balance": "", 
+                            "Remarks": f"Applied: {adj_formatted}{orig_amt_str}{status_tag}"
+                        })
                     else:
                         if doc_no: r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                        new_final_data.append(r)
                 else:
                     if doc_no: r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                    new_final_data.append(r)
                 
             elif "RECONCILIATION" in r["Type"]:
                 doc_no = r.get("Doc No", "")
@@ -257,6 +249,9 @@ def process_pdf_logic(uploaded_file):
                     orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                     doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                     r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                new_final_data.append(r)
+            else:
+                new_final_data.append(r)
 
         final_data = new_final_data
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
@@ -353,74 +348,54 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         curr_x = 10
         
         fill_row = False
-        if "CHQ SUMMARY" in str(r['Type']) or "CLOSING BAL" in str(r['Type']):
-            pdf.set_fill_color(235, 235, 235)  
+        if "PAYMENT (Total)" in str(r['Type']) or "CLOSING BAL" in str(r['Type']):
+            pdf.set_fill_color(240, 245, 250)  
             fill_row = True
             
         style = 'DF' if fill_row else 'D'
         
-        if "CHQ SUMMARY" in str(r['Type']):
+        if "CLOSING BAL" in str(r['Type']) or "PAYMENT (Total)" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
-            pdf.rect(curr_x, y_start, col_widths[0], row_height, style)
-            pdf.rect(curr_x + col_widths[0], y_start, col_widths[1], row_height, style)
-            merged_w = sum(col_widths[2:7]) 
-            pdf.rect(curr_x + col_widths[0] + col_widths[1], y_start, merged_w, row_height, style)
-            pdf.rect(curr_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height, style)
-            
-            pdf.set_xy(curr_x + col_widths[0], y_start)
-            pdf.cell(col_widths[1], 6, safe_str(r['Type']), align='L') 
-            pdf.set_xy(curr_x + col_widths[0] + col_widths[1], y_start)
-            pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
-            
-            curr_x_remarks = curr_x + col_widths[0] + col_widths[1] + merged_w
-            for i, line in enumerate(wrapped_remarks):
-                pdf.set_xy(curr_x_remarks, y_start + (i * 6))
-                pdf.cell(col_widths[7], 6, line, align='L')
-            pdf.set_y(y_start + row_height)
-            
         else:
-            if "CLOSING BAL" in str(r['Type']):
-                pdf.set_font("Arial", 'B', 6)
-            else:
-                pdf.set_font("Arial", size=6)
-                
-            temp_x = curr_x
-            for w in col_widths:
-                pdf.rect(temp_x, y_start, w, row_height, style)
-                temp_x += w
-                
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
-            curr_x += col_widths[0]
+            pdf.set_font("Arial", size=6)
             
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
-            curr_x += col_widths[1]
+        temp_x = curr_x
+        for w in col_widths:
+            pdf.rect(temp_x, y_start, w, row_height, style)
+            temp_x += w
             
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C')
-            curr_x += col_widths[2]
-            
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:20], align='C')
-            curr_x += col_widths[3]
-            
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R')
-            curr_x += col_widths[4]
-            
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R')
-            curr_x += col_widths[5]
-            
-            pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R')
-            curr_x += col_widths[6]
-            
-            for i, line in enumerate(wrapped_remarks):
-                pdf.set_xy(curr_x, y_start + (i * 6))
-                pdf.cell(col_widths[7], 6, line, align='L')
-            pdf.set_y(y_start + row_height)
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
+        curr_x += col_widths[0]
+        
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
+        curr_x += col_widths[1]
+        
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C')
+        curr_x += col_widths[2]
+        
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:20], align='C')
+        curr_x += col_widths[3]
+        
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R')
+        curr_x += col_widths[4]
+        
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R')
+        curr_x += col_widths[5]
+        
+        pdf.set_xy(curr_x, y_start)
+        pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R')
+        curr_x += col_widths[6]
+        
+        for i, line in enumerate(wrapped_remarks):
+            pdf.set_xy(curr_x, y_start + (i * 6))
+            pdf.cell(col_widths[7], 6, line, align='L')
+        pdf.set_y(y_start + row_height)
         
     if pending_invoices:
         pdf.ln(5)
@@ -482,53 +457,4 @@ def get_excel_download(final_data, header_info, summary_info, pending_invoices, 
         excel_data.append({
             "Date": r["Date"],
             "Type": r["Type"],
-            "Doc No": r["Doc No"],
-            "Chq/NEFT No": r["Chq No"],
-            "Billed Amt (Dr)": r["Debit"],
-            "Paid Amt (Cr)": r["Credit"],
-            "Balance": r["Balance"],
-            "Remarks": r["Remarks"]
-        })
-
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        pd.DataFrame([
-            ["Report Time:", header_info["Time"]], 
-            ["Heading:", "STATEMENT OF ACCOUNT"], 
-            ["Period:", header_info["Period"]], 
-            ["Customer No:", header_info["CustomerNo"]],
-            ["Customer Name:", cust_name],
-            ["CFA Name:", cfa_name]
-        ]).to_excel(writer, sheet_name='Statement', index=False, header=False)
-        
-        pd.DataFrame(summary_info, columns=["TYPE", "AMOUNT"]).to_excel(writer, sheet_name='Statement', index=False, startrow=8)
-        
-        pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=24)
-        
-        if pending_invoices:
-            start_row_pending = 24 + len(excel_data) + 3
-            pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
-            pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
-
-    return output.getvalue()
-
-if uploaded_files:
-    for file in uploaded_files:
-        data, h_info, s_info, pending_inv, err = process_pdf_logic(file)
-        if err: st.error(err)
-        else:
-            st.success(f"✅ {file.name} ready!")
-            st.info(f"PDF मधून आलेले CUSTOMERचे नाव: **{h_info['CustomerName']}**")
-            col_in1, col_in2 = st.columns(2)
-            with col_in1:
-                manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
-            with col_in2:
-                cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
-            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"):
-                st.session_state[f"ready_{file.name}"] = True
-            if st.session_state.get(f"ready_{file.name}", False):
-                st.write("---")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
-                with col2:
-                    st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
+            "Doc No": r["Doc No
