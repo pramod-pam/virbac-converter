@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (ERP Layout)")
+st.title("📄 Virbac Account Statement Converter (All Payments Highlighted)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -222,7 +222,6 @@ def process_pdf_logic(uploaded_file):
                             orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
                             doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                             
-                            # 'Applied' शब्द काढून टाकला आहे, कारण रक्कम आता डेबिट/क्रेडिट कॉलममध्ये दिसेल
                             remarks_parts = [p for p in [orig_amt_str, status_tag] if p]
                             
                             grouped_data.append({
@@ -252,6 +251,7 @@ def process_pdf_logic(uploaded_file):
                     
                     remarks_parts = [p for p in [f"Adj {doc_type}", orig_amt_str, status_tag] if p]
                     r["Remarks"] = " | ".join(remarks_parts)
+                    r["Type"] = "PAYMENT" # Single payments stay as PAYMENT
                     grouped_data.append(r)
                     
             elif "RECONCILIATION" in r["Type"]:
@@ -370,7 +370,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.set_text_color(0, 0, 0) # Reset color to black
         
         fill_row = False
-        if "PAYMENT (Total)" in str(r['Type']) or "CLOSING BAL" in str(r['Type']):
+        # --- NEW: Added 'PAYMENT' (Single) to the highlight list! ---
+        if str(r['Type']).strip() in ["PAYMENT", "PAYMENT (Total)", "CLOSING BAL"]:
             pdf.set_fill_color(240, 245, 250)  
             fill_row = True
             pdf.set_font("Arial", 'B', 6)
