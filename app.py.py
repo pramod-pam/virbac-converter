@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Customer-Centric Version)")
+st.title("📄 Virbac Account Statement Converter (Signature Fixed)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -243,7 +243,6 @@ def process_pdf_logic(uploaded_file):
         final_data = new_final_data
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         
-        # --- ३. पेन्डिंग बिलांची लिस्ट (Pending Invoices Logic) ---
         pending_invoices = []
         for doc, pending_amt in inv_balances.items():
             if pending_amt > 0.5:
@@ -269,7 +268,6 @@ def process_pdf_logic(uploaded_file):
 def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoices, manual_name="", cfa_name=""):
     from fpdf import FPDF
     
-    # ४. कस्टम पेज नंबरिंगसाठी (Page Numbers)
     class PDF(FPDF):
         def footer(self):
             self.set_y(-15)
@@ -309,7 +307,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # १. सोपे कॉलम हेडिंग्स (Simplified Headers)
     col_widths = [13, 30, 15, 19, 16, 16, 17, 64] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     
@@ -337,10 +334,9 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         y_start = pdf.get_y()
         curr_x = 10
         
-        # २. रंगांचा वापर (Grey Background for Summary & Closing Bal)
         fill_row = False
         if "CHQ SUMMARY" in str(r['Type']) or "CLOSING BAL" in str(r['Type']):
-            pdf.set_fill_color(235, 235, 235)  # Light Grey
+            pdf.set_fill_color(235, 235, 235)  
             fill_row = True
             
         style = 'DF' if fill_row else 'D'
@@ -408,11 +404,10 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
                 pdf.cell(col_widths[7], 6, line, align='L')
             pdf.set_y(y_start + row_height)
         
-    # --- ३. Outstanding / Pending Bills Table at the end ---
     if pending_invoices:
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 8)
-        pdf.set_fill_color(255, 204, 204) # Light Red for attention
+        pdf.set_fill_color(255, 204, 204) 
         pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
         
         p_col_widths = [25, 45, 40, 40, 40]
@@ -446,6 +441,10 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.cell(sum(p_col_widths[:4]), 6, "Total Outstanding:", border=1, align='R')
         pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, align='R', ln=True)
 
+    # --- SIGNATURE FIX: Check remaining space on the page before printing signature ---
+    if pdf.get_y() > 250: 
+        pdf.add_page()
+
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
@@ -461,7 +460,6 @@ def get_excel_download(final_data, header_info, summary_info, pending_invoices, 
     output = io.BytesIO()
     cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
     
-    # Update Column Names for Excel
     excel_data = []
     for r in final_data:
         excel_data.append({
@@ -487,10 +485,8 @@ def get_excel_download(final_data, header_info, summary_info, pending_invoices, 
         
         pd.DataFrame(summary_info, columns=["TYPE", "AMOUNT"]).to_excel(writer, sheet_name='Statement', index=False, startrow=8)
         
-        # Main Data
         pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=24)
         
-        # Pending Invoices in Excel
         if pending_invoices:
             start_row_pending = 24 + len(excel_data) + 3
             pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
