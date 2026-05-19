@@ -5,12 +5,12 @@ import re
 import datetime
 import io
 import os
-import textwrap  # <-- नवीन Text Wrapping सिस्टीमसाठी
+import textwrap
 
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Auto-Wrap Remarks)")
+st.title("📄 Virbac Account Statement Converter (Final Clean UI)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -176,41 +176,11 @@ def process_pdf_logic(uploaded_file):
                 chq_stats[key]['sum'] += amt
                 chq_stats[key]['count'] += 1
 
-        adj_tracking = {}
-        for r in final_data:
-            if "PAYMENT" in r["Type"] or "RECONCILIATION" in r["Type"]:
-                doc = r.get("Doc No", "")
-                if doc:
-                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
-                    chq = r["Chq No"]
-                    date = r["Date"]
-                    if doc not in adj_tracking:
-                        adj_tracking[doc] = {'total_adj': 0.0, 'chqs': set(), 'dates': set()}
-                    adj_tracking[doc]['total_adj'] += amt
-                    if chq: adj_tracking[doc]['chqs'].add(chq)
-                    if date: adj_tracking[doc]['dates'].add(date)
-
         new_final_data = []
         for r in final_data:
             new_final_data.append(r)
             
-            if r["Type"] in ["Sales Invoice", "Debit Note", "Credit Note(Others)", "Goods Return Invoice"]:
-                doc = r.get("Doc No", "")
-                if doc in adj_tracking:
-                    inv_amt = doc_amounts.get(doc, 0.0)
-                    tracked = adj_tracking[doc]
-                    chqs_str = ",".join(tracked['chqs'])
-                    dates_str = ",".join(tracked['dates'])
-                    
-                    chq_text = f" Chq: {chqs_str}" if chqs_str else ""
-                    date_text = f" ({dates_str})" if dates_str else ""
-                    
-                    if round(tracked['total_adj'], 2) >= round(inv_amt, 2) and inv_amt > 0:
-                        r["Remarks"] = f"[CLEARED]{chq_text}{date_text}"
-                    else:
-                        r["Remarks"] = f"[PARTIAL PD: {int(tracked['total_adj']):,}]{chq_text}{date_text}"
-
-            elif "PAYMENT" in r["Type"]:
+            if "PAYMENT" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 
@@ -238,7 +208,7 @@ def process_pdf_logic(uploaded_file):
                     if chq_stats[key]['count'] > 1:
                         r["Type"] = "PAYMENT"
                         r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                        r["Chq No"] = ""  
+                        # r["Chq No"] तसाच राहील!
                         chq_stats[key]['seen'] += 1
                         
                         if chq_stats[key]['seen'] == chq_stats[key]['count']:
@@ -250,7 +220,7 @@ def process_pdf_logic(uploaded_file):
                                 "Debit": "", 
                                 "Credit": "", 
                                 "Balance": "", 
-                                "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq Amt: {total_formatted}"
+                                "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq/NEFT Amt: {total_formatted}"
                             }
                             new_final_data.append(summary_row)
                     else:
@@ -338,8 +308,10 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    col_widths = [14, 32, 15, 15, 16, 16, 17, 65] 
-    headers = ["Date", "Type", "Doc No", "Chq No", "Debit", "Credit", "Balance", "Remarks"]
+    # --- नवीन कॉलम साईझ आणि हेडर ---
+    # Chq No ची जागा वाढवून 19 केली आहे. (13+30+15+19+16+16+17+64 = 190)
+    col_widths = [13, 30, 15, 19, 16, 16, 17, 64] 
+    headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Debit", "Credit", "Balance", "Remarks"]
     
     pdf.set_font("Arial", 'B', 7)
     for i in range(len(headers)):
@@ -347,17 +319,14 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
     pdf.ln()
     
     for r in final_data:
-        # --- NEW: Text Wrapping Logic ---
         remarks_text = safe_str(r['Remarks'])
-        # 65mm च्या कॉलममध्ये 52 अक्षरे अगदी आरामात बसतात (त्यापुढचे शब्द खालच्या ओळीवर जातील)
         wrapped_remarks = textwrap.wrap(remarks_text, width=52)
         if not wrapped_remarks:
             wrapped_remarks = [""]
             
         lines = len(wrapped_remarks)
-        row_height = lines * 6  # ओळींची संख्या * 6 (प्रत्येक ओळीची उंची)
+        row_height = lines * 6  
         
-        # जर पान संपत आले असेल, तर नवीन पान घ्या
         if pdf.get_y() + row_height > 275: 
             pdf.add_page()
             pdf.set_font("Arial", 'B', 7)
@@ -371,16 +340,14 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         if "CHQ SUMMARY" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
             
-            # --- Dynamic Borders for CHQ SUMMARY ---
             pdf.rect(curr_x, y_start, col_widths[0], row_height)
             pdf.rect(curr_x + col_widths[0], y_start, col_widths[1], row_height)
-            merged_w = sum(col_widths[2:7])
+            merged_w = sum(col_widths[2:7]) 
             pdf.rect(curr_x + col_widths[0] + col_widths[1], y_start, merged_w, row_height)
             pdf.rect(curr_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height)
             
-            # Content Printing
             pdf.set_xy(curr_x + col_widths[0], y_start)
-            pdf.cell(col_widths[1], 6, safe_str(r['Type']), align='L')  # Top aligned
+            pdf.cell(col_widths[1], 6, safe_str(r['Type']), align='L') 
             
             pdf.set_xy(curr_x + col_widths[0] + col_widths[1], y_start)
             pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
@@ -395,13 +362,11 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
         else:
             pdf.set_font("Arial", size=6)
             
-            # --- Dynamic Borders for standard rows ---
             temp_x = curr_x
             for w in col_widths:
                 pdf.rect(temp_x, y_start, w, row_height)
                 temp_x += w
                 
-            # Content Printing (Top aligned for all cells)
             pdf.set_xy(curr_x, y_start)
             pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
             curr_x += col_widths[0]
@@ -415,7 +380,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
             curr_x += col_widths[2]
             
             pdf.set_xy(curr_x, y_start)
-            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], align='C')
+            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:20], align='C')
             curr_x += col_widths[3]
             
             pdf.set_xy(curr_x, y_start)
@@ -430,7 +395,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
             pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R')
             curr_x += col_widths[6]
             
-            # Multi-line Remarks Printing
             for i, line in enumerate(wrapped_remarks):
                 pdf.set_xy(curr_x, y_start + (i * 6))
                 pdf.cell(col_widths[7], 6, line, align='L')
