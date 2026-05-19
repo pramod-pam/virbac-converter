@@ -9,7 +9,7 @@ import os
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Dynamic Balance Tracker)")
+st.title("📄 Virbac Account Statement Converter (Clean UI Summary)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -142,7 +142,6 @@ def process_pdf_logic(uploaded_file):
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2), "Remarks": remarks})
 
     if final_data:
-        # 1. Bounced Cheque Match
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
@@ -156,7 +155,6 @@ def process_pdf_logic(uploaded_file):
                                 final_data[i]["Chq No"] = final_data[j]["Chq No"]  
                                 break
         
-        # 2. Extract Original Invoice Amounts (Bill chi mukhya rakkam shodhane)
         doc_amounts = {}
         for r in final_data:
             if r["Type"] not in ["PAYMENT", "RECONCILIATION", "OPENING BAL", "CLOSING BAL"] and "BOUNCED" not in r["Type"]:
@@ -165,10 +163,8 @@ def process_pdf_logic(uploaded_file):
                     if amt != "":
                         doc_amounts[r["Doc No"]] = float(amt)
 
-        # Pending Amount Tracker sathi dictionary
         inv_balances = {k: v for k, v in doc_amounts.items()}
 
-        # 3. Chq stats
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
@@ -179,17 +175,45 @@ def process_pdf_logic(uploaded_file):
                 chq_stats[key]['sum'] += amt
                 chq_stats[key]['count'] += 1
 
+        adj_tracking = {}
+        for r in final_data:
+            if "PAYMENT" in r["Type"] or "RECONCILIATION" in r["Type"]:
+                doc = r.get("Doc No", "")
+                if doc:
+                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                    chq = r["Chq No"]
+                    date = r["Date"]
+                    if doc not in adj_tracking:
+                        adj_tracking[doc] = {'total_adj': 0.0, 'chqs': set(), 'dates': set()}
+                    adj_tracking[doc]['total_adj'] += amt
+                    if chq: adj_tracking[doc]['chqs'].add(chq)
+                    if date: adj_tracking[doc]['dates'].add(date)
+
         new_final_data = []
         for r in final_data:
             new_final_data.append(r)
             
-            # Masterstroke: Track Payment & Reconciliations for Pending/Cleared status
-            if "PAYMENT" in r["Type"] or "RECONCILIATION" in r["Type"]:
+            if r["Type"] in ["Sales Invoice", "Debit Note", "Credit Note(Others)", "Goods Return Invoice"]:
+                doc = r.get("Doc No", "")
+                if doc in adj_tracking:
+                    inv_amt = doc_amounts.get(doc, 0.0)
+                    tracked = adj_tracking[doc]
+                    chqs_str = ",".join(tracked['chqs'])
+                    dates_str = ",".join(tracked['dates'])
+                    
+                    chq_text = f" Chq: {chqs_str}" if chqs_str else ""
+                    date_text = f" ({dates_str})" if dates_str else ""
+                    
+                    if round(tracked['total_adj'], 2) >= round(inv_amt, 2) and inv_amt > 0:
+                        r["Remarks"] = f"[CLEARED]{chq_text}{date_text}"
+                    else:
+                        r["Remarks"] = f"[PARTIAL PD: {int(tracked['total_adj']):,}]{chq_text}{date_text}"
+
+            elif "PAYMENT" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 
                 status_tag = ""
-                # Balance kiti urla ahe te check kara
                 if doc_no and doc_no in inv_balances:
                     inv_balances[doc_no] -= amt
                     pending = inv_balances[doc_no]
@@ -198,59 +222,73 @@ def process_pdf_logic(uploaded_file):
                     else:
                         status_tag = f" [Pend: {int(pending):,}]"
                 
-                if "PAYMENT" in r["Type"]:
-                    adj_formatted = f"{int(amt):,}"
-                    orig_amt = doc_amounts.get(doc_no, None)
-                    orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                adj_formatted = f"{int(amt):,}"
+                orig_amt = doc_amounts.get(doc_no, None)
+                orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                
+                is_partial = ""
+                if orig_amt and round(amt, 2) < round(orig_amt, 2):
+                    is_partial = " [PARTIAL]"
+                
+                if r["Chq No"]:
+                    key = r["Chq No"]
+                    total_formatted = f"{int(chq_stats[key]['sum']):,}"
                     
-                    if r["Chq No"]:
-                        key = r["Chq No"]
-                        total_formatted = f"{int(chq_stats[key]['sum']):,}"
+                    if chq_stats[key]['count'] > 1:
+                        r["Type"] = "PAYMENT"
+                        r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                        r["Chq No"] = ""  
+                        chq_stats[key]['seen'] += 1
                         
-                        if chq_stats[key]['count'] > 1:
-                            r["Type"] = "PAYMENT"
-                            r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                            r["Chq No"] = ""  
-                            chq_stats[key]['seen'] += 1
-                            
-                            if chq_stats[key]['seen'] == chq_stats[key]['count']:
-                                summary_row = {
-                                    "Date": "", 
-                                    "Type": "-> CHQ SUMMARY", 
-                                    "Doc No": "", 
-                                    "Chq No": key,  
-                                    "Debit": "", 
-                                    "Credit": "", 
-                                    "Balance": "", 
-                                    "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq Amt: {total_formatted}"
-                                }
-                                new_final_data.append(summary_row)
-                        else:
-                            if doc_no:
-                                r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                        if chq_stats[key]['seen'] == chq_stats[key]['count']:
+                            summary_row = {
+                                "Date": "", 
+                                "Type": "-> CHQ SUMMARY", 
+                                "Doc No": "", 
+                                "Chq No": key,  
+                                "Debit": "", 
+                                "Credit": "", 
+                                "Balance": "", 
+                                "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq Amt: {total_formatted}"
+                            }
+                            new_final_data.append(summary_row)
                     else:
                         if doc_no:
                             r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
-                
-                # RECONCILIATION madhe pan Pend/Cleared disel!
-                elif "RECONCILIATION" in r["Type"]:
+                else:
                     if doc_no:
-                        adj_formatted = f"{int(amt):,}"
-                        orig_amt = doc_amounts.get(doc_no, None)
-                        orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
-                        
-                        if doc_no.startswith('3') or doc_no.startswith('4'):
-                            doc_type = "Cr Note"
-                        elif doc_no.startswith('5'):
-                            doc_type = "Dr Note"
-                        elif doc_no.startswith('8'):
-                            doc_type = "TCS Dr Note"
-                        elif doc_no.startswith('000'):
-                            doc_type = "Adv"
+                        r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                
+            elif "RECONCILIATION" in r["Type"]:
+                doc_no = r.get("Doc No", "")
+                if doc_no:
+                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                    
+                    status_tag = ""
+                    if doc_no in inv_balances:
+                        inv_balances[doc_no] -= amt
+                        pending = inv_balances[doc_no]
+                        if pending <= 0.5:
+                            status_tag = " [CLEARED]"
                         else:
-                            doc_type = "Inv"
-                            
-                        r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                            status_tag = f" [Pend: {int(pending):,}]"
+
+                    adj_formatted = f"{int(amt):,}"
+                    orig_amt = doc_amounts.get(doc_no, None)
+                    orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
+                    
+                    if doc_no.startswith('3') or doc_no.startswith('4'):
+                        doc_type = "Cr Note"
+                    elif doc_no.startswith('5'):
+                        doc_type = "Dr Note"
+                    elif doc_no.startswith('8'):
+                        doc_type = "TCS Dr Note"
+                    elif doc_no.startswith('000'):
+                        doc_type = "Adv"
+                    else:
+                        doc_type = "Inv"
+                        
+                    r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
 
         final_data = new_final_data
 
@@ -316,21 +354,36 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, manual_name="",
                 pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C')
             pdf.ln()
             
+        # --- नवीन 'Merged Cell' लॉजिक CHQ SUMMARY साठी ---
         if "CHQ SUMMARY" in str(r['Type']):
             pdf.set_font("Arial", 'B', 6)
+            
+            # १. Date कॉलम (रिकामा)
+            pdf.cell(col_widths[0], 6, "", border='LTB', align='C')
+            
+            # २. Type कॉलम (-> CHQ SUMMARY)
+            pdf.cell(col_widths[1], 6, safe_str(r['Type']), border='TB', align='L')
+            
+            # ३. मधले ५ कॉलम्स एकत्र (Merge: Doc No + Chq No + Debit + Credit + Balance)
+            merged_width = col_widths[2] + col_widths[3] + col_widths[4] + col_widths[5] + col_widths[6]
+            pdf.cell(merged_width, 6, safe_str(r['Chq No']), border='TB', align='C')
+            
+            # ४. Remarks कॉलम
+            pdf.cell(col_widths[7], 6, safe_str(r['Remarks']), border='RTB', align='L')
+            pdf.ln()
+            
+        # ----------------------------------------------------
         else:
             pdf.set_font("Arial", size=6)
-            
-        pdf.cell(col_widths[0], 6, safe_str(r['Date']), border=1, align='C')
-        pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], border=1, align='L')
-        pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), border=1, align='C')
-        pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], border=1, align='C')
-        pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
-        pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
-        pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
-        # Remarks cut hou naye mhanun slice thoda vadhvla ahe
-        pdf.cell(col_widths[7], 6, safe_str(r['Remarks'])[:72], border=1, align='L')
-        pdf.ln()
+            pdf.cell(col_widths[0], 6, safe_str(r['Date']), border=1, align='C')
+            pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], border=1, align='L')
+            pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), border=1, align='C')
+            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], border=1, align='C')
+            pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", border=1, align='R')
+            pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", border=1, align='R')
+            pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", border=1, align='R')
+            pdf.cell(col_widths[7], 6, safe_str(r['Remarks'])[:72], border=1, align='L')
+            pdf.ln()
         
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 10)
