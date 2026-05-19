@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Signature Fixed)")
+st.title("📄 Virbac Account Statement Converter (Net NEFT Fixed)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -166,14 +166,19 @@ def process_pdf_logic(uploaded_file):
 
         inv_balances = {k: v for k, v in doc_amounts.items()}
 
+        # --- नवीन Net Amount Logic (Credit vs Debit calculation) ---
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
-                amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                c_amt = float(r["Credit"]) if r["Credit"] != "" else 0.0
+                d_amt = float(r["Debit"]) if r["Debit"] != "" else 0.0
+                
                 if key not in chq_stats:
-                    chq_stats[key] = {'sum': 0.0, 'count': 0, 'seen': 0}
-                chq_stats[key]['sum'] += amt
+                    chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0}
+                
+                chq_stats[key]['total_c'] += c_amt
+                chq_stats[key]['total_d'] += d_amt
                 chq_stats[key]['count'] += 1
 
         adj_tracking = {}
@@ -207,23 +212,36 @@ def process_pdf_logic(uploaded_file):
                 orig_amt = doc_amounts.get(doc_no, None)
                 orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
                 
+                # Payment chya oli madhe doc_no nusar Adv/Inv takne
+                doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                
                 if r["Chq No"]:
                     key = r["Chq No"]
-                    total_formatted = f"{int(chq_stats[key]['sum']):,}"
+                    
+                    # Net Calculation apply kela ahe
+                    total_c = chq_stats[key]['total_c']
+                    total_d = chq_stats[key]['total_d']
+                    net_amt = abs(total_c - total_d)
+                    total_adj = total_c if total_c > total_d else total_d
+                    
+                    total_adj_formatted = f"{int(total_adj):,}"
+                    net_amt_formatted = f"{int(net_amt):,}"
+                    
                     if chq_stats[key]['count'] > 1:
                         r["Type"] = "PAYMENT"
-                        r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                        r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
                         chq_stats[key]['seen'] += 1
+                        
                         if chq_stats[key]['seen'] == chq_stats[key]['count']:
                             new_final_data.append({
                                 "Date": "", "Type": "-> CHQ SUMMARY", "Doc No": "", "Chq No": key,  
                                 "Debit": "", "Credit": "", "Balance": "", 
-                                "Remarks": f"Total Inv Adj: {total_formatted} | Total Chq/NEFT Amt: {total_formatted}"
+                                "Remarks": f"Total Inv Adj: {total_adj_formatted} | Net Chq/NEFT Amt: {net_amt_formatted}"
                             })
                     else:
-                        if doc_no: r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                        if doc_no: r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
                 else:
-                    if doc_no: r["Remarks"] = f"Inv: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                    if doc_no: r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
                 
             elif "RECONCILIATION" in r["Type"]:
                 doc_no = r.get("Doc No", "")
@@ -441,7 +459,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.cell(sum(p_col_widths[:4]), 6, "Total Outstanding:", border=1, align='R')
         pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, align='R', ln=True)
 
-    # --- SIGNATURE FIX: Check remaining space on the page before printing signature ---
     if pdf.get_y() > 250: 
         pdf.add_page()
 
