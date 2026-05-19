@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Universal ERP Layout)")
+st.title("📄 Virbac Account Statement Converter (ERP Layout)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -179,7 +179,6 @@ def process_pdf_logic(uploaded_file):
                 chq_stats[key]['count'] += 1
                 chq_stats[key]['last_bal'] = r['Balance'] 
 
-        # --- Universal Grouping Logic ---
         grouped_data = []
         skip_indices = set()
         
@@ -190,53 +189,71 @@ def process_pdf_logic(uploaded_file):
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
                 
-                # Payment (Single or Multiple) नेहमी Parent-Child फॉर्मेटमध्येच दिसेल!
-                if chq_stats[key]['seen'] == 0:
-                    total_c = chq_stats[key]['total_c']
-                    total_d = chq_stats[key]['total_d']
-                    net_amt = abs(total_c - total_d)
-                    
-                    grouped_data.append({
-                        "Date": chq_stats[key]['date'], 
-                        "Type": "PAYMENT (Total)", 
-                        "Doc No": "", 
-                        "Chq No": key,  
-                        "Debit": total_d if total_d > 0 else "", 
-                        "Credit": total_c if total_c > 0 else "", 
-                        "Balance": chq_stats[key]['last_bal'], 
-                        "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
-                    })
-                    
-                for j in range(i, len(final_data)):
-                    if final_data[j]["Chq No"] == key and "PAYMENT" in final_data[j]["Type"]:
-                        child_r = final_data[j]
-                        doc_no = child_r.get("Doc No", "")
-                        amt = float(child_r["Credit"]) if child_r["Credit"] != "" else (float(child_r["Debit"]) if child_r["Debit"] != "" else 0.0)
-                        
-                        status_tag = ""
-                        if doc_no and doc_no in inv_balances:
-                            inv_balances[doc_no] -= amt
-                            pending = inv_balances[doc_no]
-                            status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
-                        
-                        orig_amt = doc_amounts.get(doc_no, None)
-                        orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
-                        adj_formatted = f"{int(amt):,}"
-                        doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                if chq_stats[key]['count'] > 1:
+                    if chq_stats[key]['seen'] == 0:
+                        total_c = chq_stats[key]['total_c']
+                        total_d = chq_stats[key]['total_d']
+                        net_amt = abs(total_c - total_d)
                         
                         grouped_data.append({
-                            "Date": "", 
-                            "Type": f"    -> Adj {doc_type}" if doc_no else "    -> On Acct", 
-                            "Doc No": doc_no, 
-                            "Chq No": "",  
-                            "Debit": "", 
-                            "Credit": "", 
-                            "Balance": "", 
-                            "Remarks": f"Applied: {adj_formatted}{orig_amt_str}{status_tag}" if doc_no else f"Applied: {adj_formatted}"
+                            "Date": chq_stats[key]['date'], 
+                            "Type": "PAYMENT (Total)", 
+                            "Doc No": "", 
+                            "Chq No": key,  
+                            "Debit": total_d if total_d > 0 else "", 
+                            "Credit": total_c if total_c > 0 else "", 
+                            "Balance": chq_stats[key]['last_bal'], 
+                            "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
                         })
-                        skip_indices.add(j)
-                        chq_stats[key]['seen'] += 1
                         
+                    for j in range(i, len(final_data)):
+                        if final_data[j]["Chq No"] == key and "PAYMENT" in final_data[j]["Type"]:
+                            child_r = final_data[j]
+                            doc_no = child_r.get("Doc No", "")
+                            amt = float(child_r["Credit"]) if child_r["Credit"] != "" else (float(child_r["Debit"]) if child_r["Debit"] != "" else 0.0)
+                            
+                            status_tag = ""
+                            if doc_no and doc_no in inv_balances:
+                                inv_balances[doc_no] -= amt
+                                pending = inv_balances[doc_no]
+                                status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
+                            
+                            orig_amt = doc_amounts.get(doc_no, None)
+                            orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                            doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                            
+                            # 'Applied' शब्द काढून टाकला आहे, कारण रक्कम आता डेबिट/क्रेडिट कॉलममध्ये दिसेल
+                            remarks_parts = [p for p in [orig_amt_str, status_tag] if p]
+                            
+                            grouped_data.append({
+                                "Date": "", 
+                                "Type": f"    -> Adj {doc_type}" if doc_no else "    -> On Acct", 
+                                "Doc No": doc_no, 
+                                "Chq No": "",  
+                                "Debit": child_r["Debit"], 
+                                "Credit": child_r["Credit"], 
+                                "Balance": "", 
+                                "Remarks": " | ".join(remarks_parts)
+                            })
+                            skip_indices.add(j)
+                            chq_stats[key]['seen'] += 1
+                else:
+                    # Single payment
+                    doc_no = r.get("Doc No", "")
+                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                    status_tag = ""
+                    if doc_no and doc_no in inv_balances:
+                        inv_balances[doc_no] -= amt
+                        pending = inv_balances[doc_no]
+                        status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
+                    orig_amt = doc_amounts.get(doc_no, None)
+                    orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                    doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                    
+                    remarks_parts = [p for p in [f"Adj {doc_type}", orig_amt_str, status_tag] if p]
+                    r["Remarks"] = " | ".join(remarks_parts)
+                    grouped_data.append(r)
+                    
             elif "RECONCILIATION" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 if doc_no:
@@ -245,12 +262,13 @@ def process_pdf_logic(uploaded_file):
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
                         pending = inv_balances[doc_no]
-                        status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
-                    adj_formatted = f"{int(amt):,}"
+                        status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
                     orig_amt = doc_amounts.get(doc_no, None)
-                    orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
+                    orig_amt_str = f"Amt: {int(orig_amt):,}" if orig_amt else ""
                     doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
-                    r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                    
+                    remarks_parts = [p for p in [f"Adj {doc_type}", orig_amt_str, status_tag] if p]
+                    r["Remarks"] = " | ".join(remarks_parts)
                 grouped_data.append(r)
             else:
                 grouped_data.append(r)
