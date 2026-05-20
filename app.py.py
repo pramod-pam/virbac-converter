@@ -321,7 +321,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     pdf.ln(5)
     
     # 3. MAIN TABLE (Classic Format)
-    # --- बदल: Doc No ची रुंदी 13 वरून 16 केली आणि Remarks 51 वरून 48 केली ---
     col_widths = [13, 35, 16, 31, 15, 15, 17, 48] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
@@ -329,7 +328,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     pdf.ln()
     
     for r in final_data:
-        # Remarks ची रुंदी कमी झाल्यामुळे Wrapping Width थोडी ऍडजस्ट केली
         wrapped_remarks = textwrap.wrap(safe_str(r['Remarks']), width=36) or [""]
         row_height = len(wrapped_remarks) * 6
         if pdf.get_y() + row_height > 275:
@@ -451,4 +449,14 @@ if uploaded_files:
             c2.metric("Billed (Dr)", f"₹ {int(dash_info['Billed (Dr)']):,}")
             c3.metric("Paid (Cr)", f"₹ {int(dash_info['Paid / Adj (Cr)']):,}")
             c4.metric("Closing Bal", f"₹ {int(dash_info['Closing Bal']):,}")
-            c5.metric("Total Pending", f"₹ {int(dash_
+            c5.metric("Total Pending", f"₹ {int(dash_info['Total Pending']):,}")
+            st.write("---")
+            col_in1, col_in2 = st.columns(2)
+            with col_in1: manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
+            with col_in2: cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
+            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"): st.session_state[f"ready_{file.name}"] = True
+            if st.session_state.get(f"ready_{file.name}", False):
+                st.write("---")
+                col1, col2 = st.columns(2)
+                with col1: st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                with col2: st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
