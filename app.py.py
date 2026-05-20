@@ -320,15 +320,16 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # 3. MAIN TABLE (Classic Format)
-    col_widths = [13, 28, 16, 31, 15, 15, 17, 55] 
+    # --- बदल: Type ची रुंदी 35 केली, Doc No ची रुंदी 13 केली आणि Remarks ची 51 केली ---
+    col_widths = [13, 35, 13, 31, 15, 15, 17, 51] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
     for i in range(len(headers)): pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C', fill=True)
     pdf.ln()
     
     for r in final_data:
-        wrapped_remarks = textwrap.wrap(safe_str(r['Remarks']), width=40) or [""]
+        # Remarks ची width कमी केल्यामुळे textwrap width थोडी ऍडजस्ट केली
+        wrapped_remarks = textwrap.wrap(safe_str(r['Remarks']), width=38) or [""]
         row_height = len(wrapped_remarks) * 6
         if pdf.get_y() + row_height > 275:
             pdf.add_page(); pdf.set_font("Arial", 'B', 8)
@@ -352,7 +353,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             
         style = 'DF' if fill_row else 'D'
         
-        # Border & Text Drawing Logic (Classic format uses merging only for CHQ SUMMARY)
+        # Border & Text Drawing Logic
         if is_summary:
             merged_w = sum(col_widths[2:7])
             pdf.rect(temp_x, y_start, col_widths[0], row_height, style)
@@ -361,7 +362,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             pdf.rect(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height, style)
             
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
-            pdf.set_xy(temp_x + col_widths[0], y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type']), align='L')
+            # Type ची लांबी आता 35 mm आहे
+            pdf.set_xy(temp_x + col_widths[0], y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
             pdf.set_xy(temp_x + col_widths[0] + col_widths[1], y_start); pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
             
             for i, line in enumerate(wrapped_remarks):
@@ -374,7 +376,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, style); cur_rect_x += w
             
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:28], align='L'); temp_x += col_widths[1]
+            # Type ची लांबी 35 mm, त्यामुळे आता मोठी नावं आरामात बसतील
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L'); temp_x += col_widths[1]
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C'); temp_x += col_widths[2]
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:30], align='C'); temp_x += col_widths[3]
             
