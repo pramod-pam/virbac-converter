@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="wide")
 
-st.title("📄 Virbac Account Statement Converter (Dual Dashboard)")
+st.title("📄 Virbac Account Statement Converter (Classic Format + Dashboards)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -174,48 +174,59 @@ def process_pdf_logic(uploaded_file):
                 c_amt = float(r["Credit"]) if r["Credit"] != "" else 0.0
                 d_amt = float(r["Debit"]) if r["Debit"] != "" else 0.0
                 if key not in chq_stats:
-                    chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0, 'last_bal': 0.0, 'date': r['Date']}
+                    chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0}
                 chq_stats[key]['total_c'] += c_amt
                 chq_stats[key]['total_d'] += d_amt
                 chq_stats[key]['count'] += 1
-                chq_stats[key]['last_bal'] = r['Balance'] 
 
         grouped_data = []
-        skip_indices = set()
-        
-        for i, r in enumerate(final_data):
-            if i in skip_indices: continue
-            if "PAYMENT" in r["Type"] and r["Chq No"]:
-                key = r["Chq No"]
-                if chq_stats[key]['seen'] == 0:
-                    total_c = chq_stats[key]['total_c']
-                    total_d = chq_stats[key]['total_d']
-                    net_amt = abs(total_c - total_d)
-                    grouped_data.append({
-                        "Date": chq_stats[key]['date'], "Type": "PAYMENT (Total)", "Doc No": "", "Chq No": key,  
-                        "Debit": total_d if total_d > 0 else "", "Credit": total_c if total_c > 0 else "", 
-                        "Balance": chq_stats[key]['last_bal'], "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
-                    })
-                for j in range(i, len(final_data)):
-                    if final_data[j]["Chq No"] == key and "PAYMENT" in final_data[j]["Type"]:
-                        child_r = final_data[j]
-                        doc_no = child_r.get("Doc No", "")
-                        amt = float(child_r["Credit"]) if child_r["Credit"] != "" else (float(child_r["Debit"]) if child_r["Debit"] != "" else 0.0)
-                        status_tag = ""
-                        if doc_no and doc_no in inv_balances:
-                            inv_balances[doc_no] -= amt
-                            pending = inv_balances[doc_no]
-                            status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
-                        orig_amt = doc_amounts.get(doc_no, None)
-                        orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
-                        doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
-                        grouped_data.append({
-                            "Date": "", "Type": f"    -> Adj {doc_type}" if doc_no else "    -> On Acct", 
-                            "Doc No": doc_no, "Chq No": "", "Debit": child_r["Debit"], "Credit": child_r["Credit"], 
-                            "Balance": "", "Remarks": " | ".join([p for p in [orig_amt_str, status_tag] if p])
-                        })
-                        skip_indices.add(j)
+        for r in final_data:
+            if "PAYMENT" in r["Type"]:
+                doc_no = r.get("Doc No", "")
+                amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                
+                status_tag = ""
+                if doc_no and doc_no in inv_balances:
+                    inv_balances[doc_no] -= amt
+                    pending = inv_balances[doc_no]
+                    status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
+                
+                orig_amt = doc_amounts.get(doc_no, None)
+                orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                adj_formatted = f"{int(amt):,}"
+                
+                doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                
+                if doc_no:
+                    r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {adj_formatted}{status_tag}"
+                else:
+                    r["Remarks"] = f"Adj: {adj_formatted}"
+                
+                r["Type"] = "PAYMENT"
+                grouped_data.append(r)
+                
+                # CHQ SUMMARY Logic (Classic Format)
+                if r["Chq No"]:
+                    key = r["Chq No"]
+                    if chq_stats[key]['count'] > 1:
                         chq_stats[key]['seen'] += 1
+                        if chq_stats[key]['seen'] == chq_stats[key]['count']:
+                            total_c = chq_stats[key]['total_c']
+                            total_d = chq_stats[key]['total_d']
+                            net_amt = abs(total_c - total_d)
+                            total_adj = total_c if total_c > total_d else total_d
+                            
+                            grouped_data.append({
+                                "Date": "", 
+                                "Type": "-> CHQ SUMMARY", 
+                                "Doc No": "", 
+                                "Chq No": key,  
+                                "Debit": "", 
+                                "Credit": "", 
+                                "Balance": "", 
+                                "Remarks": f"Total Inv Adj: {int(total_adj):,} | Total Chq/NEFT Amt: {int(net_amt):,}"
+                            })
+
             elif "RECONCILIATION" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 if doc_no:
@@ -224,13 +235,14 @@ def process_pdf_logic(uploaded_file):
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
                         pending = inv_balances[doc_no]
-                        status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
+                        status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
                     orig_amt = doc_amounts.get(doc_no, None)
-                    orig_amt_str = f"Amt: {int(orig_amt):,}" if orig_amt else ""
+                    orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                     doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
-                    r["Remarks"] = " | ".join([p for p in [f"Adj {doc_type}", orig_amt_str, status_tag] if p])
+                    r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {int(amt):,}{status_tag}"
                 grouped_data.append(r)
-            else: grouped_data.append(r)
+            else:
+                grouped_data.append(r)
 
         final_data = grouped_data
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
@@ -256,7 +268,6 @@ def process_pdf_logic(uploaded_file):
 
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
         
-        # जुना डिटेल समरी तक्ता परत आणला (Re-added Detailed Summary Info)
         summary_info = [
             ("OPENING BAL", opening_balance), ("Sales Invoice", s_inv), ("PAYMENT", pay), ("RECONCILIATION", reco),
             ("Credit Note(Others)", c_oth), ("Credit Note(Brakage Expiry)", c_brk), ("Goods Return Invoice", g_ret),
@@ -309,7 +320,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # 3. MAIN TABLE
+    # 3. MAIN TABLE (Classic Format)
     col_widths = [13, 28, 16, 31, 15, 15, 17, 55] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
@@ -326,35 +337,53 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         
         y_start = pdf.get_y(); temp_x = 10
         type_str = str(r['Type']).strip()
-        is_payment = type_str in ["PAYMENT", "PAYMENT (Total)", "CLOSING BAL"]
+        
+        is_summary = "-> CHQ SUMMARY" in type_str
+        is_closing = "CLOSING BAL" in type_str
         is_bounced = "BOUNCED" in type_str.upper()
         
-        # Style Logic (Red color for Bounced Checks)
-        if is_bounced: pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7)
-        elif is_payment: pdf.set_fill_color(240, 245, 250); pdf.set_font("Arial", 'B', 7)
-        elif "-> Adj" in type_str or "-> On Acct" in type_str: pdf.set_font("Arial", 'I', 7); pdf.set_text_color(70, 70, 70)
-        else: pdf.set_font("Arial", size=7); pdf.set_text_color(0, 0, 0)
+        # Style Logic
+        if is_bounced: 
+            pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7); fill_row = False
+        elif is_summary or is_closing: 
+            pdf.set_fill_color(240, 245, 250); pdf.set_font("Arial", 'B', 7); pdf.set_text_color(0, 0, 0); fill_row = True
+        else: 
+            pdf.set_font("Arial", size=7); pdf.set_text_color(0, 0, 0); fill_row = False
+            
+        style = 'DF' if fill_row else 'D'
         
-        if is_payment: pdf.rect(temp_x, y_start, sum(col_widths), row_height, 'DF')
+        # Border & Text Drawing Logic (Classic format uses merging only for CHQ SUMMARY)
+        if is_summary:
+            merged_w = sum(col_widths[2:7])
+            pdf.rect(temp_x, y_start, col_widths[0], row_height, style)
+            pdf.rect(temp_x + col_widths[0], y_start, col_widths[1], row_height, style)
+            pdf.rect(temp_x + col_widths[0] + col_widths[1], y_start, merged_w, row_height, style)
+            pdf.rect(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height, style)
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
+            pdf.set_xy(temp_x + col_widths[0], y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type']), align='L')
+            pdf.set_xy(temp_x + col_widths[0] + col_widths[1], y_start); pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
+            
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start + (i * 6))
+                pdf.cell(col_widths[7], 6, line, align='L')
+            pdf.set_y(y_start + row_height)
+            
         else:
             cur_rect_x = temp_x
-            for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, 'D'); cur_rect_x += w
+            for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, style); cur_rect_x += w
             
-        pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
-        pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:28], align='L'); temp_x += col_widths[1]
-        if "PAYMENT (Total)" in type_str:
-            merged_w = col_widths[2] + col_widths[3]
-            pdf.set_xy(temp_x, y_start); pdf.cell(merged_w, 6, safe_str(r['Chq No'])[:35], align='C'); temp_x += merged_w
-        else:
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:28], align='L'); temp_x += col_widths[1]
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C'); temp_x += col_widths[2]
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:30], align='C'); temp_x += col_widths[3]
-        
-        pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R'); temp_x += col_widths[4]
-        pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R'); temp_x += col_widths[5]
-        pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R'); temp_x += col_widths[6]
-        for i, line in enumerate(wrapped_remarks):
-            pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
-        pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R'); temp_x += col_widths[4]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R'); temp_x += col_widths[5]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R'); temp_x += col_widths[6]
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
+            pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
         
     # Outstanding Table with AGING
     if pending_invoices:
@@ -372,7 +401,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             pdf.cell(p_col_widths[3], 6, f"{int(float(p['Billed Amt'])):,}", border=1, align='R')
             pdf.cell(p_col_widths[4], 6, f"{int(float(p['Pending Amt'])):,}", border=1, align='R')
             
-            # Age highlight Logic
             if isinstance(p['Age (Days)'], int) and p['Age (Days)'] > 30: pdf.set_font("Arial", 'B', 8)
             pdf.cell(p_col_widths[5], 6, safe_str(p['Age (Days)']), border=1, align='C'); pdf.set_font("Arial", size=8)
             pdf.ln(); total_pending += p['Pending Amt']
@@ -396,13 +424,10 @@ def get_excel_download(final_data, header_info, summary_info, dash_info, pending
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         pd.DataFrame([["Report Time:", header_info["Time"]], ["Heading:", "STATEMENT OF ACCOUNT"], ["Period:", header_info["Period"]], ["Customer No:", header_info["CustomerNo"]], ["Customer Name:", cust_name], ["CFA Name:", cfa_name]]).to_excel(writer, sheet_name='Statement', index=False, header=False)
         
-        # Dashboard in Excel
         pd.DataFrame([["Opening Bal", "Billed (Dr)", "Paid / Adj (Cr)", "Closing Bal", "Total Pending"], [dash_info['Opening Bal'], dash_info['Billed (Dr)'], dash_info['Paid / Adj (Cr)'], dash_info['Closing Bal'], dash_info['Total Pending']]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=8)
         
-        # Old Detailed Summary Table
         pd.DataFrame(summary_info, columns=["Transaction Type", "Amount (INR)"]).to_excel(writer, sheet_name='Statement', index=False, startrow=12)
         
-        # Main Data
         start_main = 12 + len(summary_info) + 3
         pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=start_main)
         
