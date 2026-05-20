@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="wide")
 
-st.title("📄 Virbac Account Statement Converter (Classic Format + Dashboards)")
+st.title("📄 Virbac Account Statement Converter (Smart Tracking & Dashboards)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -142,7 +142,6 @@ def process_pdf_logic(uploaded_file):
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2), "Remarks": remarks})
 
     if final_data:
-        # Bounced Cheque Match Logic
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
@@ -168,7 +167,6 @@ def process_pdf_logic(uploaded_file):
 
         inv_balances = {k: v for k, v in doc_amounts.items()}
         
-        # --- SMART ADVANCE TRACKER INITIALIZATION ---
         adv_balances = {}
         for r in final_data:
             if r["Doc No"] and r["Doc No"].startswith('000'):
@@ -176,13 +174,12 @@ def process_pdf_logic(uploaded_file):
                 if c_val > 0:
                     adv_balances[r["Doc No"]] = c_val
 
-        # --- CROSS-MATCHING FOR ADVANCE DEDUCTIONS ---
         adj_credits_map = {}
         for temp_r in final_data:
             if temp_r["Type"] == "Advance / Internal Adj" and temp_r["Credit"] != "":
                 c_val = float(temp_r["Credit"])
                 temp_doc = temp_r.get("Doc No", "")
-                if not temp_doc.startswith('000'): # Record what bill/Dr Note got cleared
+                if not temp_doc.startswith('000'):
                     adj_credits_map[c_val] = temp_doc
 
         chq_stats = {}
@@ -329,7 +326,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     pdf.set_font("Arial", size=10); pdf.cell(190, 6, txt=safe_str(f"Time: {header_info['Time']} | Period: {header_info['Period']}"), ln=True, align='C')
     pdf.cell(190, 6, txt=safe_str(f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C'); pdf.ln(5)
     
-    # 1. NEW TOP SUMMARY DASHBOARD
     dash_w = 190 / 5; dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(220, 235, 255)
     for h in dash_headers: pdf.cell(dash_w, 6, safe_str(h), border=1, align='C', fill=True)
@@ -340,7 +336,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         pdf.cell(dash_w, 8, safe_str(v), border=1, align='C'); pdf.set_text_color(0, 0, 0)
     pdf.ln(8)
     
-    # 2. OLD DETAILED TRANSACTION SUMMARY
     pdf.set_font("Arial", 'B', 9)
     pdf.cell(100, 6, "Transaction Type", border=1, align='L')
     pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
@@ -350,7 +345,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # 3. MAIN TABLE (Classic Format)
     col_widths = [13, 35, 16, 31, 15, 15, 17, 48] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
@@ -413,7 +407,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
                 pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
             pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
         
-    # Outstanding Table with AGING
     if pending_invoices:
         pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
         pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
