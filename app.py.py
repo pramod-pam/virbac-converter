@@ -142,6 +142,7 @@ def process_pdf_logic(uploaded_file):
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2), "Remarks": remarks})
 
     if final_data:
+        # Bounced Cheque Match Logic
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
@@ -286,12 +287,17 @@ def process_pdf_logic(uploaded_file):
                     age_days = (today_date - inv_date_obj).days
                 except: pass
                 
+                # --- NEW LOGIC: CREDIT NOTES MINUS AMOUNT ---
+                is_credit_doc = doc.startswith(('3', '4')) or "Credit Note" in details["Type"]
+                disp_billed = -details["Amt"] if is_credit_doc else details["Amt"]
+                disp_pending = -pending_amt if is_credit_doc else pending_amt
+                
                 pending_invoices.append({
                     "Date": details["Date"], "Doc No": doc, "Type": details["Type"],
-                    "Billed Amt": details["Amt"], "Pending Amt": round(pending_amt, 2),
+                    "Billed Amt": disp_billed, "Pending Amt": round(disp_pending, 2),
                     "Age (Days)": age_days
                 })
-                total_pending_amt += pending_amt
+                total_pending_amt += disp_pending
 
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
         
