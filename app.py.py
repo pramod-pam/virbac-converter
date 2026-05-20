@@ -176,6 +176,15 @@ def process_pdf_logic(uploaded_file):
                 if c_val > 0:
                     adv_balances[r["Doc No"]] = c_val
 
+        # --- CROSS-MATCHING FOR ADVANCE DEDUCTIONS ---
+        adj_credits_map = {}
+        for temp_r in final_data:
+            if temp_r["Type"] == "Advance / Internal Adj" and temp_r["Credit"] != "":
+                c_val = float(temp_r["Credit"])
+                temp_doc = temp_r.get("Doc No", "")
+                if not temp_doc.startswith('000'): # Record what bill/Dr Note got cleared
+                    adj_credits_map[c_val] = temp_doc
+
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
@@ -194,19 +203,17 @@ def process_pdf_logic(uploaded_file):
             if "PAYMENT" in r["Type"]:
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 
+                status_tag = ""
                 if doc_no and doc_no in inv_balances:
                     inv_balances[doc_no] -= amt
                     pending = inv_balances[doc_no]
                     status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
-                else:
-                    status_tag = ""
                 
                 orig_amt = doc_amounts.get(doc_no, None)
                 orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
                 adj_formatted = f"{int(amt):,}"
                 doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                 
-                # --- Advance Creation Row Remark Adjustment ---
                 if doc_no and doc_no.startswith('000'):
                     r["Remarks"] = f"Total Advance Received: {int(amt):,}"
                 elif doc_no:
@@ -217,7 +224,6 @@ def process_pdf_logic(uploaded_file):
                 r["Type"] = "PAYMENT"
                 grouped_data.append(r)
                 
-                # CHQ SUMMARY Logic (Classic Format)
                 if r["Chq No"]:
                     key = r["Chq No"]
                     if chq_stats[key]['count'] > 1:
@@ -236,15 +242,24 @@ def process_pdf_logic(uploaded_file):
 
             elif "Advance / Internal Adj" in r["Type"]:
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                is_debit_entry = r["Debit"] != ""
                 
-                # --- Advance Deduction Row Remark Calculation ---
                 if doc_no and doc_no.startswith('000'):
+                    cleared_doc = adj_credits_map.get(amt, "")
+                    target_type = "Dr Note" if cleared_doc.startswith('5') else "Inv"
+                    
                     if doc_no in adv_balances:
                         adv_balances[doc_no] -= amt
                         rem_adv_bal = adv_balances[doc_no]
-                        r["Remarks"] = f"Deducted from Adv: {doc_no} | Remaining Adv Bal: {int(rem_adv_bal):,}"
+                        if is_debit_entry and cleared_doc:
+                            r["Remarks"] = f"Used for {target_type}: {cleared_doc} | Rem Adv Bal: {int(rem_adv_bal):,}"
+                        else:
+                            r["Remarks"] = f"Deducted from Adv: {doc_no} | Rem Adv Bal: {int(rem_adv_bal):,}"
                     else:
-                        r["Remarks"] = f"Deducted from Adv: {doc_no} | Adj: {int(amt):,}"
+                        if is_debit_entry and cleared_doc:
+                            r["Remarks"] = f"Used for {target_type}: {cleared_doc} | Adj: {int(amt):,}"
+                        else:
+                            r["Remarks"] = f"Deducted from Adv: {doc_no} | Adj: {int(amt):,}"
                 else:
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
@@ -263,7 +278,6 @@ def process_pdf_logic(uploaded_file):
         final_data = grouped_data
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         
-        # --- PENDING BILLS WITH AGING LOGIC ---
         pending_invoices = []
         total_pending_amt = 0.0
         for doc, pending_amt in inv_balances.items():
@@ -315,7 +329,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     pdf.set_font("Arial", size=10); pdf.cell(190, 6, txt=safe_str(f"Time: {header_info['Time']} | Period: {header_info['Period']}"), ln=True, align='C')
     pdf.cell(190, 6, txt=safe_str(f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C'); pdf.ln(5)
     
-    # Dashboard Dashboard
+    # 1. NEW TOP SUMMARY DASHBOARD
     dash_w = 190 / 5; dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(220, 235, 255)
     for h in dash_headers: pdf.cell(dash_w, 6, safe_str(h), border=1, align='C', fill=True)
@@ -326,7 +340,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         pdf.cell(dash_w, 8, safe_str(v), border=1, align='C'); pdf.set_text_color(0, 0, 0)
     pdf.ln(8)
     
-    # Detailed Summary
+    # 2. OLD DETAILED TRANSACTION SUMMARY
     pdf.set_font("Arial", 'B', 9)
     pdf.cell(100, 6, "Transaction Type", border=1, align='L')
     pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
@@ -336,7 +350,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # Main Table Width Adjustments
+    # 3. MAIN TABLE (Classic Format)
     col_widths = [13, 35, 16, 31, 15, 15, 17, 48] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
@@ -399,7 +413,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
                 pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
             pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
         
-    # Outstanding Table with Aging
+    # Outstanding Table with AGING
     if pending_invoices:
         pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
         pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
@@ -463,7 +477,7 @@ if uploaded_files:
             c2.metric("Billed (Dr)", f"₹ {int(dash_info['Billed (Dr)']):,}")
             c3.metric("Paid (Cr)", f"₹ {int(dash_info['Paid / Adj (Cr)']):,}")
             c4.metric("Closing Bal", f"₹ {int(dash_info['Closing Bal']):,}")
-            c5.metric("Total Pending", f"₹ {int(dash_info['Total Pending']):,}")
+            c5.metric("Total Pending", f"₹ {int(dash_info['Total Pending']):,}", delta_color="inverse")
             st.write("---")
             col_in1, col_in2 = st.columns(2)
             with col_in1: manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
