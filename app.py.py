@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Premium UI)")
+st.title("📄 Virbac Account Statement Converter (Perfect Column Widths)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -250,7 +250,7 @@ def process_pdf_logic(uploaded_file):
                     
                     remarks_parts = [p for p in [f"Adj {doc_type}", orig_amt_str, status_tag] if p]
                     r["Remarks"] = " | ".join(remarks_parts)
-                    r["Type"] = "PAYMENT"
+                    r["Type"] = "PAYMENT" 
                     grouped_data.append(r)
                     
             elif "RECONCILIATION" in r["Type"]:
@@ -339,8 +339,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    # --- बदल 1: Chq/NEFT No ची साईझ वाढवली ---
-    col_widths = [13, 28, 12, 31, 15, 15, 17, 59] 
+    # --- बदल 1: Doc No ची रुंदी वाढवली आहे (12 वरून 16) आणि Remarks कमी केली आहे (59 वरून 55) ---
+    col_widths = [13, 28, 16, 31, 15, 15, 17, 55] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     
     pdf.set_font("Arial", 'B', 8)
@@ -350,7 +350,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
     
     for r in final_data:
         remarks_text = safe_str(r['Remarks'])
-        wrapped_remarks = textwrap.wrap(remarks_text, width=42)
+        # Remarks कॉलमची रुंदी कमी झाल्यामुळे, Wrapping width थोडी ऍडजस्ट केली आहे
+        wrapped_remarks = textwrap.wrap(remarks_text, width=40)
         if not wrapped_remarks:
             wrapped_remarks = [""]
             
@@ -374,7 +375,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         if is_highlighted_payment:
             pdf.set_fill_color(240, 245, 250)  
             pdf.set_font("Arial", 'B', 7)
-            # --- बदल 2: पूर्ण लाईनसाठी एकच मोठी बॉक्स बॉर्डर (कोणतीही मधली रेषा नाही) ---
             pdf.rect(temp_x, y_start, sum(col_widths), row_height, 'DF')
         elif "-> Adj" in str(r['Type']) or "-> On Acct" in str(r['Type']):
             pdf.set_font("Arial", 'I', 7)
@@ -390,7 +390,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
                 pdf.rect(curr_rect_x, y_start, w, row_height, 'D')
                 curr_rect_x += w
             
-        # Text Printing (Coordinates remains exactly same, only borders change)
         pdf.set_xy(temp_x, y_start)
         pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
         temp_x += col_widths[0]
@@ -399,7 +398,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:28], align='L')
         temp_x += col_widths[1]
         
-        # Merge Doc No and Chq No ONLY for "PAYMENT (Total)" line
         if "PAYMENT (Total)" in str(r['Type']):
             merged_w = col_widths[2] + col_widths[3]
             pdf.set_xy(temp_x, y_start)
