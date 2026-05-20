@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="wide")
 
-st.title("📄 Virbac Account Statement Converter (Ultimate Pro Version)")
+st.title("📄 Virbac Account Statement Converter (Dual Dashboard)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -47,7 +47,7 @@ def process_pdf_logic(uploaded_file):
                                 break
                         if customer_name: break
     except Exception as e:
-        return None, None, None, None, f"PDF vachtana error: {e}"
+        return None, None, None, None, None, f"PDF vachtana error: {e}"
 
     extracted_rows = []
     with pdfplumber.open(uploaded_file) as pdf:
@@ -58,6 +58,7 @@ def process_pdf_logic(uploaded_file):
 
     final_data, running_balance, opening_balance, found_opening = [], 0.0, 0.0, False
     total_billed_dr, total_paid_cr = 0.0, 0.0
+    s_inv, pay, reco, c_oth, c_brk, g_ret, d_not, tcs, tds, tech_b, n_tech_b = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     for row_text in extracted_rows:
         row_upper = row_text.upper()
@@ -125,6 +126,18 @@ def process_pdf_logic(uploaded_file):
             running_balance += (debit - credit)
             total_billed_dr += debit
             total_paid_cr += credit
+
+            if s_type == "Sales Invoice": s_inv += val
+            elif s_type == "PAYMENT": pay += val
+            elif s_type == "RECONCILIATION": reco += (debit - credit)
+            elif s_type == "Credit Note(Others)": c_oth += val
+            elif s_type == "Credit Note(Brakage Expiry)": c_brk += val
+            elif s_type == "Goods Return Invoice": g_ret += val
+            elif s_type == "Debit Note": d_not += val
+            elif s_type == "TCS Debit Note": tcs += val
+            elif s_type == "TDS Credit Note": tds += val
+            elif s_type == "TECHNICAL BOUNCED": tech_b += val
+            elif s_type == "NON TECHNICAL BOUNCED": n_tech_b += val
 
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2), "Remarks": remarks})
 
@@ -228,7 +241,6 @@ def process_pdf_logic(uploaded_file):
         for doc, pending_amt in inv_balances.items():
             if pending_amt > 0.5:
                 details = doc_details_for_pending.get(doc, {"Date": "01/01/00", "Type": "Invoice", "Amt": pending_amt})
-                # Aging calculation
                 age_days = "N/A"
                 try:
                     inv_date_obj = datetime.datetime.strptime(details["Date"], "%d/%m/%y").date()
@@ -243,14 +255,23 @@ def process_pdf_logic(uploaded_file):
                 total_pending_amt += pending_amt
 
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
+        
+        # जुना डिटेल समरी तक्ता परत आणला (Re-added Detailed Summary Info)
+        summary_info = [
+            ("OPENING BAL", opening_balance), ("Sales Invoice", s_inv), ("PAYMENT", pay), ("RECONCILIATION", reco),
+            ("Credit Note(Others)", c_oth), ("Credit Note(Brakage Expiry)", c_brk), ("Goods Return Invoice", g_ret),
+            ("Debit Note", d_not), ("TCS Debit Note", tcs), ("TDS Credit Note", tds),
+            ("TECHNICAL BOUNCED", tech_b), ("NON TECHNICAL BOUNCED", n_tech_b), ("CLOSING BAL", running_balance)
+        ]
+        
         dash_info = {
             "Opening Bal": opening_balance, "Billed (Dr)": total_billed_dr, 
             "Paid / Adj (Cr)": total_paid_cr, "Closing Bal": running_balance, "Total Pending": total_pending_amt
         }
-        return final_data, header_info, dash_info, pending_invoices, None
-    return None, None, None, None, "Data sapadla nahi."
+        return final_data, header_info, summary_info, dash_info, pending_invoices, None
+    return None, None, None, None, None, "Data sapadla nahi."
 
-def get_pdf_download_fpdf(final_data, header_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
+def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
     from fpdf import FPDF
     class PDF(FPDF):
         def footer(self):
@@ -267,7 +288,7 @@ def get_pdf_download_fpdf(final_data, header_info, dash_info, pending_invoices, 
     pdf.set_font("Arial", size=10); pdf.cell(190, 6, txt=safe_str(f"Time: {header_info['Time']} | Period: {header_info['Period']}"), ln=True, align='C')
     pdf.cell(190, 6, txt=safe_str(f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C'); pdf.ln(5)
     
-    # Dashboard
+    # 1. NEW TOP SUMMARY DASHBOARD
     dash_w = 190 / 5; dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(220, 235, 255)
     for h in dash_headers: pdf.cell(dash_w, 6, safe_str(h), border=1, align='C', fill=True)
@@ -276,9 +297,19 @@ def get_pdf_download_fpdf(final_data, header_info, dash_info, pending_invoices, 
     for i, v in enumerate(dash_vals):
         if i == 4: pdf.set_text_color(200, 0, 0)
         pdf.cell(dash_w, 8, safe_str(v), border=1, align='C'); pdf.set_text_color(0, 0, 0)
-    pdf.ln(10)
+    pdf.ln(8)
     
-    # Main Table
+    # 2. OLD DETAILED TRANSACTION SUMMARY
+    pdf.set_font("Arial", 'B', 9)
+    pdf.cell(100, 6, "Transaction Type", border=1, align='L')
+    pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
+    pdf.set_font("Arial", size=9)
+    for row in summary_info:
+        pdf.cell(100, 6, safe_str(row[0]), border=1, align='L')
+        pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
+    pdf.ln(5)
+    
+    # 3. MAIN TABLE
     col_widths = [13, 28, 16, 31, 15, 15, 17, 55] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
@@ -298,19 +329,17 @@ def get_pdf_download_fpdf(final_data, header_info, dash_info, pending_invoices, 
         is_payment = type_str in ["PAYMENT", "PAYMENT (Total)", "CLOSING BAL"]
         is_bounced = "BOUNCED" in type_str.upper()
         
-        # Style Logic
+        # Style Logic (Red color for Bounced Checks)
         if is_bounced: pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7)
         elif is_payment: pdf.set_fill_color(240, 245, 250); pdf.set_font("Arial", 'B', 7)
         elif "-> Adj" in type_str or "-> On Acct" in type_str: pdf.set_font("Arial", 'I', 7); pdf.set_text_color(70, 70, 70)
         else: pdf.set_font("Arial", size=7); pdf.set_text_color(0, 0, 0)
         
-        # Border Logic
         if is_payment: pdf.rect(temp_x, y_start, sum(col_widths), row_height, 'DF')
         else:
             cur_rect_x = temp_x
             for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, 'D'); cur_rect_x += w
             
-        # Data Printing
         pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
         pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:28], align='L'); temp_x += col_widths[1]
         if "PAYMENT (Total)" in type_str:
@@ -342,10 +371,12 @@ def get_pdf_download_fpdf(final_data, header_info, dash_info, pending_invoices, 
             pdf.cell(p_col_widths[2], 6, safe_str(p['Type'])[:25], border=1, align='C')
             pdf.cell(p_col_widths[3], 6, f"{int(float(p['Billed Amt'])):,}", border=1, align='R')
             pdf.cell(p_col_widths[4], 6, f"{int(float(p['Pending Amt'])):,}", border=1, align='R')
-            # Age in Bold if > 30 days
+            
+            # Age highlight Logic
             if isinstance(p['Age (Days)'], int) and p['Age (Days)'] > 30: pdf.set_font("Arial", 'B', 8)
             pdf.cell(p_col_widths[5], 6, safe_str(p['Age (Days)']), border=1, align='C'); pdf.set_font("Arial", size=8)
             pdf.ln(); total_pending += p['Pending Amt']
+            
         pdf.set_font("Arial", 'B', 8); pdf.cell(sum(p_col_widths[:4]), 6, "Total Outstanding:", border=1, align='R')
         pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, align='R')
         pdf.cell(p_col_widths[5], 6, "", border=1, ln=True)
@@ -359,22 +390,31 @@ def get_pdf_download_fpdf(final_data, header_info, dash_info, pending_invoices, 
     pdf.ln(5); pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
     return bytes(pdf.output(dest='S').encode('latin1', 'ignore'))
 
-def get_excel_download(final_data, header_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
+def get_excel_download(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
     output = io.BytesIO(); cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
     excel_data = [{"Date": r["Date"], "Type": r["Type"], "Doc No": r["Doc No"], "Chq/NEFT No": r["Chq No"], "Billed Amt (Dr)": r["Debit"], "Paid Amt (Cr)": r["Credit"], "Balance": r["Balance"], "Remarks": r["Remarks"]} for r in final_data]
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         pd.DataFrame([["Report Time:", header_info["Time"]], ["Heading:", "STATEMENT OF ACCOUNT"], ["Period:", header_info["Period"]], ["Customer No:", header_info["CustomerNo"]], ["Customer Name:", cust_name], ["CFA Name:", cfa_name]]).to_excel(writer, sheet_name='Statement', index=False, header=False)
+        
+        # Dashboard in Excel
         pd.DataFrame([["Opening Bal", "Billed (Dr)", "Paid / Adj (Cr)", "Closing Bal", "Total Pending"], [dash_info['Opening Bal'], dash_info['Billed (Dr)'], dash_info['Paid / Adj (Cr)'], dash_info['Closing Bal'], dash_info['Total Pending']]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=8)
-        pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=12)
+        
+        # Old Detailed Summary Table
+        pd.DataFrame(summary_info, columns=["Transaction Type", "Amount (INR)"]).to_excel(writer, sheet_name='Statement', index=False, startrow=12)
+        
+        # Main Data
+        start_main = 12 + len(summary_info) + 3
+        pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=start_main)
+        
         if pending_invoices:
-            start_row_pending = 12 + len(excel_data) + 3
+            start_row_pending = start_main + len(excel_data) + 3
             pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY (with Aging)"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
             pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
     return output.getvalue()
 
 if uploaded_files:
     for file in uploaded_files:
-        data, h_info, dash_info, pending_inv, err = process_pdf_logic(file)
+        data, h_info, s_info, dash_info, pending_inv, err = process_pdf_logic(file)
         if err: st.error(err)
         else:
             st.success(f"✅ {file.name} ready!")
@@ -393,5 +433,5 @@ if uploaded_files:
             if st.session_state.get(f"ready_{file.name}", False):
                 st.write("---")
                 col1, col2 = st.columns(2)
-                with col1: st.download_button("📥 Excel Download", get_excel_download(data, h_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
-                with col2: st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
+                with col1: st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                with col2: st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
