@@ -10,7 +10,7 @@ import textwrap
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="centered")
 
-st.title("📄 Virbac Account Statement Converter (Bigger Fonts)")
+st.title("📄 Virbac Account Statement Converter (Premium UI)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
 
 uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
@@ -189,53 +189,70 @@ def process_pdf_logic(uploaded_file):
             if "PAYMENT" in r["Type"] and r["Chq No"]:
                 key = r["Chq No"]
                 
-                if chq_stats[key]['seen'] == 0:
-                    total_c = chq_stats[key]['total_c']
-                    total_d = chq_stats[key]['total_d']
-                    net_amt = abs(total_c - total_d)
-                    
-                    grouped_data.append({
-                        "Date": chq_stats[key]['date'], 
-                        "Type": "PAYMENT (Total)", 
-                        "Doc No": "", 
-                        "Chq No": key,  
-                        "Debit": total_d if total_d > 0 else "", 
-                        "Credit": total_c if total_c > 0 else "", 
-                        "Balance": chq_stats[key]['last_bal'], 
-                        "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
-                    })
-                    
-                for j in range(i, len(final_data)):
-                    if final_data[j]["Chq No"] == key and "PAYMENT" in final_data[j]["Type"]:
-                        child_r = final_data[j]
-                        doc_no = child_r.get("Doc No", "")
-                        amt = float(child_r["Credit"]) if child_r["Credit"] != "" else (float(child_r["Debit"]) if child_r["Debit"] != "" else 0.0)
-                        
-                        status_tag = ""
-                        if doc_no and doc_no in inv_balances:
-                            inv_balances[doc_no] -= amt
-                            pending = inv_balances[doc_no]
-                            status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
-                        
-                        orig_amt = doc_amounts.get(doc_no, None)
-                        orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
-                        doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
-                        
-                        remarks_parts = [p for p in [orig_amt_str, status_tag] if p]
+                if chq_stats[key]['count'] > 1:
+                    if chq_stats[key]['seen'] == 0:
+                        total_c = chq_stats[key]['total_c']
+                        total_d = chq_stats[key]['total_d']
+                        net_amt = abs(total_c - total_d)
                         
                         grouped_data.append({
-                            "Date": "", 
-                            "Type": f"    -> Adj {doc_type}" if doc_no else "    -> On Acct", 
-                            "Doc No": doc_no, 
-                            "Chq No": "",  
-                            "Debit": child_r["Debit"], 
-                            "Credit": child_r["Credit"], 
-                            "Balance": "", 
-                            "Remarks": " | ".join(remarks_parts)
+                            "Date": chq_stats[key]['date'], 
+                            "Type": "PAYMENT (Total)", 
+                            "Doc No": "", 
+                            "Chq No": key,  
+                            "Debit": total_d if total_d > 0 else "", 
+                            "Credit": total_c if total_c > 0 else "", 
+                            "Balance": chq_stats[key]['last_bal'], 
+                            "Remarks": f"Net NEFT/Chq Amt: {int(net_amt):,}"
                         })
-                        skip_indices.add(j)
-                        chq_stats[key]['seen'] += 1
                         
+                    for j in range(i, len(final_data)):
+                        if final_data[j]["Chq No"] == key and "PAYMENT" in final_data[j]["Type"]:
+                            child_r = final_data[j]
+                            doc_no = child_r.get("Doc No", "")
+                            amt = float(child_r["Credit"]) if child_r["Credit"] != "" else (float(child_r["Debit"]) if child_r["Debit"] != "" else 0.0)
+                            
+                            status_tag = ""
+                            if doc_no and doc_no in inv_balances:
+                                inv_balances[doc_no] -= amt
+                                pending = inv_balances[doc_no]
+                                status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
+                            
+                            orig_amt = doc_amounts.get(doc_no, None)
+                            orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                            doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                            
+                            remarks_parts = [p for p in [orig_amt_str, status_tag] if p]
+                            
+                            grouped_data.append({
+                                "Date": "", 
+                                "Type": f"    -> Adj {doc_type}" if doc_no else "    -> On Acct", 
+                                "Doc No": doc_no, 
+                                "Chq No": "",  
+                                "Debit": child_r["Debit"], 
+                                "Credit": child_r["Credit"], 
+                                "Balance": "", 
+                                "Remarks": " | ".join(remarks_parts)
+                            })
+                            skip_indices.add(j)
+                            chq_stats[key]['seen'] += 1
+                else:
+                    doc_no = r.get("Doc No", "")
+                    amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
+                    status_tag = ""
+                    if doc_no and doc_no in inv_balances:
+                        inv_balances[doc_no] -= amt
+                        pending = inv_balances[doc_no]
+                        status_tag = "[CLEARED]" if pending <= 0.5 else f"[Pend: {int(pending):,}]"
+                    orig_amt = doc_amounts.get(doc_no, None)
+                    orig_amt_str = f"Inv Amt: {int(orig_amt):,}" if orig_amt else ""
+                    doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                    
+                    remarks_parts = [p for p in [f"Adj {doc_type}", orig_amt_str, status_tag] if p]
+                    r["Remarks"] = " | ".join(remarks_parts)
+                    r["Type"] = "PAYMENT"
+                    grouped_data.append(r)
+                    
             elif "RECONCILIATION" in r["Type"]:
                 doc_no = r.get("Doc No", "")
                 if doc_no:
@@ -286,7 +303,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
     class PDF(FPDF):
         def footer(self):
             self.set_y(-15)
-            # Footer font size slightly increased
             self.set_font('Arial', 'I', 9)
             self.cell(0, 10, f'Page {self.page_no()} of {{nb}}', 0, 0, 'C')
 
@@ -323,10 +339,10 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
     pdf.ln(5)
     
-    col_widths = [13, 30, 15, 19, 16, 16, 17, 64] 
+    # --- बदल 1: Chq/NEFT No ची साईझ वाढवली ---
+    col_widths = [13, 28, 12, 31, 15, 15, 17, 59] 
     headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
     
-    # Headers font size increased from 7 to 8
     pdf.set_font("Arial", 'B', 8)
     for i in range(len(headers)):
         pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C')
@@ -334,8 +350,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
     
     for r in final_data:
         remarks_text = safe_str(r['Remarks'])
-        # Wrap width slightly reduced because font is bigger
-        wrapped_remarks = textwrap.wrap(remarks_text, width=46)
+        wrapped_remarks = textwrap.wrap(remarks_text, width=42)
         if not wrapped_remarks:
             wrapped_remarks = [""]
             
@@ -350,68 +365,76 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
             pdf.ln()
             
         y_start = pdf.get_y()
-        curr_x = 10
+        temp_x = 10
         
         pdf.set_text_color(0, 0, 0) 
         
-        fill_row = False
-        if str(r['Type']).strip() in ["PAYMENT", "PAYMENT (Total)", "CLOSING BAL"]:
+        is_highlighted_payment = str(r['Type']).strip() in ["PAYMENT", "PAYMENT (Total)", "CLOSING BAL"]
+        
+        if is_highlighted_payment:
             pdf.set_fill_color(240, 245, 250)  
-            fill_row = True
-            # Bold rows font size increased from 6 to 7
             pdf.set_font("Arial", 'B', 7)
+            # --- बदल 2: पूर्ण लाईनसाठी एकच मोठी बॉक्स बॉर्डर (कोणतीही मधली रेषा नाही) ---
+            pdf.rect(temp_x, y_start, sum(col_widths), row_height, 'DF')
         elif "-> Adj" in str(r['Type']) or "-> On Acct" in str(r['Type']):
-            # Italic rows font size increased from 6 to 7
             pdf.set_font("Arial", 'I', 7)
-            pdf.set_text_color(70, 70, 70) # Made it slightly darker gray for better readability
+            pdf.set_text_color(70, 70, 70) 
+            curr_rect_x = temp_x
+            for w in col_widths:
+                pdf.rect(curr_rect_x, y_start, w, row_height, 'D')
+                curr_rect_x += w
         else:
-            # Normal rows font size increased from 6 to 7
             pdf.set_font("Arial", size=7)
+            curr_rect_x = temp_x
+            for w in col_widths:
+                pdf.rect(curr_rect_x, y_start, w, row_height, 'D')
+                curr_rect_x += w
             
-        style = 'DF' if fill_row else 'D'
-            
-        temp_x = curr_x
-        for w in col_widths:
-            pdf.rect(temp_x, y_start, w, row_height, style)
-            temp_x += w
-            
-        pdf.set_xy(curr_x, y_start)
+        # Text Printing (Coordinates remains exactly same, only borders change)
+        pdf.set_xy(temp_x, y_start)
         pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
-        curr_x += col_widths[0]
+        temp_x += col_widths[0]
         
-        pdf.set_xy(curr_x, y_start)
+        pdf.set_xy(temp_x, y_start)
         pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:28], align='L')
-        curr_x += col_widths[1]
+        temp_x += col_widths[1]
         
-        pdf.set_xy(curr_x, y_start)
-        pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C')
-        curr_x += col_widths[2]
-        
-        pdf.set_xy(curr_x, y_start)
-        pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:16], align='C')
-        curr_x += col_widths[3]
-        
-        pdf.set_xy(curr_x, y_start)
+        # Merge Doc No and Chq No ONLY for "PAYMENT (Total)" line
+        if "PAYMENT (Total)" in str(r['Type']):
+            merged_w = col_widths[2] + col_widths[3]
+            pdf.set_xy(temp_x, y_start)
+            pdf.cell(merged_w, 6, safe_str(r['Chq No'])[:35], align='C')
+            temp_x += merged_w
+        else:
+            pdf.set_xy(temp_x, y_start)
+            pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C')
+            temp_x += col_widths[2]
+            
+            pdf.set_xy(temp_x, y_start)
+            pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:30], align='C')
+            temp_x += col_widths[3]
+            
+        pdf.set_xy(temp_x, y_start)
         pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R')
-        curr_x += col_widths[4]
+        temp_x += col_widths[4]
         
-        pdf.set_xy(curr_x, y_start)
+        pdf.set_xy(temp_x, y_start)
         pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R')
-        curr_x += col_widths[5]
+        temp_x += col_widths[5]
         
-        pdf.set_xy(curr_x, y_start)
+        pdf.set_xy(temp_x, y_start)
         pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R')
-        curr_x += col_widths[6]
+        temp_x += col_widths[6]
         
         for i, line in enumerate(wrapped_remarks):
-            pdf.set_xy(curr_x, y_start + (i * 6))
+            pdf.set_xy(temp_x, y_start + (i * 6))
             pdf.cell(col_widths[7], 6, line, align='L')
+            
         pdf.set_y(y_start + row_height)
         
     if pending_invoices:
         pdf.set_text_color(0, 0, 0)
         pdf.ln(5)
-        # Pending headers slightly bigger
         pdf.set_font("Arial", 'B', 9)
         pdf.set_fill_color(255, 204, 204) 
         pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
@@ -424,7 +447,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
             pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C')
         pdf.ln()
         
-        # Pending table data slightly bigger
         pdf.set_font("Arial", size=8)
         total_pending = 0.0
         for p in pending_invoices:
@@ -452,7 +474,7 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, pending_invoice
         pdf.add_page()
 
     pdf.ln(10)
-    pdf.set_font("Arial", 'B', 11) # Footer size increased
+    pdf.set_font("Arial", 'B', 11) 
     pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True)
     pdf.ln(5)
     if cfa_name.strip():
