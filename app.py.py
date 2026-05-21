@@ -175,13 +175,20 @@ def process_pdf_logic(uploaded_file):
                 if c_val > 0:
                     adv_balances[r["Doc No"]] = c_val
 
+        # --- Tree Structure Logic Maps ---
         adj_credits_map = {}
+        reconc_dr_map = {}
         for temp_r in final_data:
-            if temp_r["Type"] == "Advance / Internal Adj" and temp_r["Credit"] != "":
-                c_val = float(temp_r["Credit"])
-                temp_doc = temp_r.get("Doc No", "")
-                if temp_doc and not temp_doc.startswith('000'):
-                    adj_credits_map[c_val] = temp_doc
+            if temp_r["Type"] == "Advance / Internal Adj":
+                if temp_r["Credit"] != "":
+                    c_val = float(temp_r["Credit"])
+                    temp_doc = temp_r.get("Doc No", "")
+                    if temp_doc and not temp_doc.startswith('000'):
+                        adj_credits_map[c_val] = temp_doc
+                if temp_r["Debit"] != "":
+                    d_val = float(temp_r["Debit"])
+                    temp_doc = temp_r.get("Doc No", "")
+                    reconc_dr_map[(temp_r["Date"], d_val)] = temp_doc
 
         chq_stats = {}
         for r in final_data:
@@ -210,6 +217,7 @@ def process_pdf_logic(uploaded_file):
                 orig_amt = doc_amounts.get(doc_no, None)
                 orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
                 adj_formatted = f"{int(amt):,}"
+                
                 doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                 
                 if doc_no and doc_no.startswith('000'):
@@ -243,51 +251,43 @@ def process_pdf_logic(uploaded_file):
                 is_debit_entry = r["Debit"] != ""
                 doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
-                if doc_no and doc_no.startswith('000'):
-                    r["Type"] = "Advance Adjustment"
-                    cleared_doc = adj_credits_map.get(amt, "")
-                    target_type = "Dr Note" if cleared_doc.startswith('5') else "Inv"
-                    
-                    if doc_no in adv_balances:
-                        adv_balances[doc_no] -= amt
-                        rem_adv_bal = adv_balances[doc_no]
-                        if is_debit_entry and cleared_doc:
-                            r["Remarks"] = f"Used for {target_type}: {cleared_doc} | Rem Adv Bal: {int(rem_adv_bal):,}"
-                        else:
+                if is_debit_entry:
+                    if doc_no and (doc_no.startswith(('22', '3', '4', '9')) or "Return" in doc_category or "Credit Note" in doc_category):
+                        # बदललेला शब्द: System Adjustment
+                        r["Type"] = ">> System Adjustment"
+                        r["Remarks"] = "|-->> System entry (Ignore)"
+                    elif doc_no and doc_no.startswith('000'):
+                        r["Type"] = "Advance Utilized"
+                        if doc_no in adv_balances:
+                            adv_balances[doc_no] -= amt
+                            rem_adv_bal = adv_balances[doc_no]
                             r["Remarks"] = f"Deducted from Adv: {doc_no} | Rem Adv Bal: {int(rem_adv_bal):,}"
-                    else:
-                        if is_debit_entry and cleared_doc:
-                            r["Remarks"] = f"Used for {target_type}: {cleared_doc} | Adj: {int(amt):,}"
                         else:
                             r["Remarks"] = f"Deducted from Adv: {doc_no} | Adj: {int(amt):,}"
-                            
-                elif "Return" in doc_category or "Credit Note" in doc_category:
-                    r["Type"] = "Return / CN Adjusted"
-                    if is_debit_entry:
-                        cleared_doc = adj_credits_map.get(amt, "")
-                        if cleared_doc:
-                            r["Remarks"] = f"Return/CN value applied to Inv: {cleared_doc}"
-                        else:
-                            r["Remarks"] = f"Return/CN value applied to pending bills"
                     else:
-                        r["Remarks"] = f"Adjusted: {int(amt):,}"
-                        
-                    if doc_no in inv_balances:
-                        inv_balances[doc_no] -= amt
-                        
+                        r["Type"] = "Internal Adjustment"
+                        r["Remarks"] = f"Debit Adj: {doc_no} | Amt: {int(amt):,}"
                 else:
-                    r["Type"] = "Internal Adjustment"
+                    source_doc = reconc_dr_map.get((r["Date"], amt), "")
+                    is_from_return = source_doc and (source_doc.startswith(('22', '3', '4', '9')) or "Return" in doc_details_for_pending.get(source_doc, {}).get("Type", ""))
+                    
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
                         pending = inv_balances[doc_no]
                         status_tag = " [CLEARED]" if pending <= 0.5 else f" [Pend: {int(pending):,}]"
                     else:
                         status_tag = ""
-                    orig_amt = doc_amounts.get(doc_no, None)
-                    orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
-                    doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Inv"
-                    r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {int(amt):,}{status_tag}"
-                    
+
+                    if is_from_return:
+                        r["Type"] = ">> Bill Settled"
+                        r["Remarks"] = f"\-->> Adjusted against Inv: {doc_no}{status_tag}"
+                    else:
+                        r["Type"] = "Internal Adjustment"
+                        orig_amt = doc_amounts.get(doc_no, None)
+                        orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
+                        doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Inv"
+                        r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {int(amt):,}{status_tag}"
+                        
                 grouped_data.append(r)
             else:
                 grouped_data.append(r)
