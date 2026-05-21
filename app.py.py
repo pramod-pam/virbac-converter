@@ -178,7 +178,7 @@ def process_pdf_logic(uploaded_file):
 
         adj_credits_map = {}
         reconc_dr_map = {}
-        reconc_return_debits_by_date = {}  # NEW: For Group Matching
+        reconc_return_debits_by_date = {}  
         
         for temp_r in final_data:
             if temp_r["Type"] == "Reconciliation":
@@ -192,7 +192,6 @@ def process_pdf_logic(uploaded_file):
                     temp_doc = temp_r.get("Doc No", "")
                     reconc_dr_map[(temp_r["Date"], d_val)] = temp_doc
                     
-                    # Store Return/CN debits by date to check subset sums later
                     t_cat = doc_details_for_pending.get(temp_doc, {}).get("Type", "")
                     if temp_doc and (temp_doc.startswith(('22', '3', '4', '9')) or "Return" in t_cat or "Credit Note" in t_cat):
                         dt = temp_r["Date"]
@@ -262,6 +261,10 @@ def process_pdf_logic(uploaded_file):
                 doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
                 if is_debit_entry:
+                    # --- NEW FIX: Reduce Credit Note / Return balance when utilized! ---
+                    if doc_no in inv_balances:
+                        inv_balances[doc_no] -= amt
+                    
                     if doc_no and (doc_no.startswith(('22', '3', '4', '9')) or "Return" in doc_category or "Credit Note" in doc_category):
                         r["Type"] = ">> System Adj (Reconciliation)"
                         r["Remarks"] = "Adjusted from Return | System entry (Ignore)"
@@ -280,13 +283,12 @@ def process_pdf_logic(uploaded_file):
                     source_doc = reconc_dr_map.get((r["Date"], amt), "")
                     is_from_return = source_doc and (source_doc.startswith(('22', '3', '4', '9')) or "Return" in doc_details_for_pending.get(source_doc, {}).get("Type", ""))
                     
-                    # --- GROUP MATCHING LOGIC (Checks if sum of grouped CNs matches credit amt) ---
                     if not is_from_return:
                         ret_debits = reconc_return_debits_by_date.get(r["Date"], [])
                         if ret_debits:
                             if abs(sum(ret_debits) - amt) < 0.5:
                                 is_from_return = True
-                            elif len(ret_debits) <= 15: # Safe subset sum limit
+                            elif len(ret_debits) <= 15: 
                                 for combo_len in range(2, len(ret_debits) + 1):
                                     found_combo = False
                                     for combo in itertools.combinations(ret_debits, combo_len):
