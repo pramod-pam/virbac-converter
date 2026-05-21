@@ -97,7 +97,7 @@ def process_pdf_logic(uploaded_file):
             elif any(code in row_upper for code in ["CBOU101", "CBOU102", "CBOU110"]): 
                 t_type, s_type = "NON TECHNICAL BOUNCED", "NON TECHNICAL BOUNCED"
             elif "RECONC" in row_upper: 
-                t_type, s_type = "Advance / Internal Adj", "Advance / Internal Adj"
+                t_type, s_type = "Reconciliation", "Reconciliation"
             elif any(x in row_upper for x in ["CHQ", "PAYMENT", "DD-NEFT", "NEFT"]) or (doc_no.startswith('000') and is_cr): 
                 t_type, s_type = "PAYMENT", "PAYMENT"
             elif "INVOICE" in row_upper:
@@ -129,7 +129,7 @@ def process_pdf_logic(uploaded_file):
 
             if s_type == "Sales Invoice": s_inv += val
             elif s_type == "PAYMENT": pay += val
-            elif s_type == "Advance / Internal Adj": reco += (debit - credit)
+            elif s_type == "Reconciliation": reco += (debit - credit)
             elif s_type == "Credit Note(Others)": c_oth += val
             elif s_type == "Credit Note(Brakage Expiry)": c_brk += val
             elif s_type == "Goods Return Invoice": g_ret += val
@@ -159,7 +159,7 @@ def process_pdf_logic(uploaded_file):
         doc_amounts = {}
         doc_details_for_pending = {}
         for r in final_data:
-            if r["Type"] not in ["PAYMENT", "Advance / Internal Adj", "OPENING BAL", "CLOSING BAL"] and "BOUNCED" not in r["Type"]:
+            if r["Type"] not in ["PAYMENT", "Reconciliation", "OPENING BAL", "CLOSING BAL"] and "BOUNCED" not in r["Type"]:
                 if r["Doc No"]:
                     amt = r["Debit"] if r["Debit"] != "" else r["Credit"]
                     if amt != "":
@@ -178,7 +178,7 @@ def process_pdf_logic(uploaded_file):
         adj_credits_map = {}
         reconc_dr_map = {}
         for temp_r in final_data:
-            if temp_r["Type"] == "Advance / Internal Adj":
+            if temp_r["Type"] == "Reconciliation":
                 if temp_r["Credit"] != "":
                     c_val = float(temp_r["Credit"])
                     temp_doc = temp_r.get("Doc No", "")
@@ -245,17 +245,17 @@ def process_pdf_logic(uploaded_file):
                                 "Remarks": f"Total Inv Adj: {int(total_adj):,} | Total Chq/NEFT Amt: {int(net_amt):,}"
                             })
 
-            elif "Advance / Internal Adj" in r["Type"]:
+            elif "Reconciliation" in r["Type"]:
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 is_debit_entry = r["Debit"] != ""
                 doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
                 if is_debit_entry:
                     if doc_no and (doc_no.startswith(('22', '3', '4', '9')) or "Return" in doc_category or "Credit Note" in doc_category):
-                        r["Type"] = ">> System Adjustment"
+                        r["Type"] = ">> System Adj (Reconciliation)"
                         r["Remarks"] = "Adjusted from Return | System entry (Ignore)"
                     elif doc_no and doc_no.startswith('000'):
-                        r["Type"] = "Advance Utilized"
+                        r["Type"] = "Advance Utilized (Reconciliation)"
                         if doc_no in adv_balances:
                             adv_balances[doc_no] -= amt
                             rem_adv_bal = adv_balances[doc_no]
@@ -263,7 +263,7 @@ def process_pdf_logic(uploaded_file):
                         else:
                             r["Remarks"] = f"Deducted from Adv: {doc_no} | Adj: {int(amt):,}"
                     else:
-                        r["Type"] = "Internal Adjustment"
+                        r["Type"] = "Reconciliation"
                         r["Remarks"] = f"Debit Adj: {doc_no} | Amt: {int(amt):,}"
                 else:
                     source_doc = reconc_dr_map.get((r["Date"], amt), "")
@@ -277,12 +277,12 @@ def process_pdf_logic(uploaded_file):
                         status_tag = ""
 
                     if is_from_return:
-                        r["Type"] = ">> Bill Settled"
+                        r["Type"] = ">> Bill Settled (Reconciliation)"
                         orig_amt = doc_amounts.get(doc_no, None)
                         orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                         r["Remarks"] = f"Bill Settled Against Return | Inv: {doc_no}{orig_amt_str} | Adj: {int(amt):,}{status_tag}"
                     else:
-                        r["Type"] = "Internal Adjustment"
+                        r["Type"] = "Reconciliation"
                         orig_amt = doc_amounts.get(doc_no, None)
                         orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                         doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Inv"
@@ -322,7 +322,7 @@ def process_pdf_logic(uploaded_file):
         header_info = {"Time": run_datetime, "Period": period, "CustomerNo": customer_no, "CustomerName": customer_name}
         
         summary_info = [
-            ("OPENING BAL", opening_balance), ("Sales Invoice", s_inv), ("PAYMENT", pay), ("Advance / Internal Adj", reco),
+            ("OPENING BAL", opening_balance), ("Sales Invoice", s_inv), ("PAYMENT", pay), ("Reconciliation", reco),
             ("Credit Note(Others)", c_oth), ("Credit Note(Brakage Expiry)", c_brk), ("Goods Return Invoice", g_ret),
             ("Debit Note", d_not), ("TCS Debit Note", tcs), ("TDS Credit Note", tds),
             ("TECHNICAL BOUNCED", tech_b), ("NON TECHNICAL BOUNCED", n_tech_b), ("CLOSING BAL", running_balance)
