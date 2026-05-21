@@ -180,7 +180,7 @@ def process_pdf_logic(uploaded_file):
             if temp_r["Type"] == "Advance / Internal Adj" and temp_r["Credit"] != "":
                 c_val = float(temp_r["Credit"])
                 temp_doc = temp_r.get("Doc No", "")
-                if not temp_doc.startswith('000'):
+                if temp_doc and not temp_doc.startswith('000'):
                     adj_credits_map[c_val] = temp_doc
 
         chq_stats = {}
@@ -210,7 +210,7 @@ def process_pdf_logic(uploaded_file):
                 orig_amt = doc_amounts.get(doc_no, None)
                 orig_amt_str = f" | Inv Amt: {int(orig_amt):,}" if orig_amt else ""
                 adj_formatted = f"{int(amt):,}"
-                doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
+                doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Adv" if doc_no.startswith('000') else "Inv"
                 
                 if doc_no and doc_no.startswith('000'):
                     r["Remarks"] = f"Total Advance Received: {int(amt):,}"
@@ -241,8 +241,10 @@ def process_pdf_logic(uploaded_file):
             elif "Advance / Internal Adj" in r["Type"]:
                 amt = float(r["Credit"]) if r["Credit"] != "" else (float(r["Debit"]) if r["Debit"] != "" else 0.0)
                 is_debit_entry = r["Debit"] != ""
+                doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
                 if doc_no and doc_no.startswith('000'):
+                    r["Type"] = "Advance Adjustment"
                     cleared_doc = adj_credits_map.get(amt, "")
                     target_type = "Dr Note" if cleared_doc.startswith('5') else "Inv"
                     
@@ -258,7 +260,23 @@ def process_pdf_logic(uploaded_file):
                             r["Remarks"] = f"Used for {target_type}: {cleared_doc} | Adj: {int(amt):,}"
                         else:
                             r["Remarks"] = f"Deducted from Adv: {doc_no} | Adj: {int(amt):,}"
+                            
+                elif "Return" in doc_category or "Credit Note" in doc_category:
+                    r["Type"] = "Return / CN Adjusted"
+                    if is_debit_entry:
+                        cleared_doc = adj_credits_map.get(amt, "")
+                        if cleared_doc:
+                            r["Remarks"] = f"Return/CN value applied to Inv: {cleared_doc}"
+                        else:
+                            r["Remarks"] = f"Return/CN value applied to pending bills"
+                    else:
+                        r["Remarks"] = f"Adjusted: {int(amt):,}"
+                        
+                    if doc_no in inv_balances:
+                        inv_balances[doc_no] -= amt
+                        
                 else:
+                    r["Type"] = "Internal Adjustment"
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
                         pending = inv_balances[doc_no]
@@ -267,8 +285,9 @@ def process_pdf_logic(uploaded_file):
                         status_tag = ""
                     orig_amt = doc_amounts.get(doc_no, None)
                     orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
-                    doc_type = "Cr Note" if doc_no.startswith(('3','4')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Inv"
+                    doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Inv"
                     r["Remarks"] = f"{doc_type}: {doc_no}{orig_amt_str} | Adj: {int(amt):,}{status_tag}"
+                    
                 grouped_data.append(r)
             else:
                 grouped_data.append(r)
@@ -287,8 +306,7 @@ def process_pdf_logic(uploaded_file):
                     age_days = (today_date - inv_date_obj).days
                 except: pass
                 
-                # --- NEW LOGIC: CREDIT NOTES MINUS AMOUNT ---
-                is_credit_doc = doc.startswith(('3', '4')) or "Credit Note" in details["Type"]
+                is_credit_doc = doc.startswith(('3', '4', '9')) or "Credit Note" in details["Type"] or "Goods Return" in details["Type"]
                 disp_billed = -details["Amt"] if is_credit_doc else details["Amt"]
                 disp_pending = -pending_amt if is_credit_doc else pending_amt
                 
