@@ -6,6 +6,7 @@ import datetime
 import io
 import os
 import textwrap
+import itertools
 
 # Web app design
 st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="wide")
@@ -177,6 +178,8 @@ def process_pdf_logic(uploaded_file):
 
         adj_credits_map = {}
         reconc_dr_map = {}
+        reconc_return_debits_by_date = {}  # NEW: For Group Matching
+        
         for temp_r in final_data:
             if temp_r["Type"] == "Reconciliation":
                 if temp_r["Credit"] != "":
@@ -188,6 +191,14 @@ def process_pdf_logic(uploaded_file):
                     d_val = float(temp_r["Debit"])
                     temp_doc = temp_r.get("Doc No", "")
                     reconc_dr_map[(temp_r["Date"], d_val)] = temp_doc
+                    
+                    # Store Return/CN debits by date to check subset sums later
+                    t_cat = doc_details_for_pending.get(temp_doc, {}).get("Type", "")
+                    if temp_doc and (temp_doc.startswith(('22', '3', '4', '9')) or "Return" in t_cat or "Credit Note" in t_cat):
+                        dt = temp_r["Date"]
+                        if dt not in reconc_return_debits_by_date:
+                            reconc_return_debits_by_date[dt] = []
+                        reconc_return_debits_by_date[dt].append(d_val)
 
         chq_stats = {}
         for r in final_data:
@@ -268,6 +279,23 @@ def process_pdf_logic(uploaded_file):
                 else:
                     source_doc = reconc_dr_map.get((r["Date"], amt), "")
                     is_from_return = source_doc and (source_doc.startswith(('22', '3', '4', '9')) or "Return" in doc_details_for_pending.get(source_doc, {}).get("Type", ""))
+                    
+                    # --- GROUP MATCHING LOGIC (Checks if sum of grouped CNs matches credit amt) ---
+                    if not is_from_return:
+                        ret_debits = reconc_return_debits_by_date.get(r["Date"], [])
+                        if ret_debits:
+                            if abs(sum(ret_debits) - amt) < 0.5:
+                                is_from_return = True
+                            elif len(ret_debits) <= 15: # Safe subset sum limit
+                                for combo_len in range(2, len(ret_debits) + 1):
+                                    found_combo = False
+                                    for combo in itertools.combinations(ret_debits, combo_len):
+                                        if abs(sum(combo) - amt) < 0.5:
+                                            is_from_return = True
+                                            found_combo = True
+                                            break
+                                    if found_combo:
+                                        break
                     
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
