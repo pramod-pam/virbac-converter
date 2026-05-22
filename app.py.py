@@ -532,4 +532,82 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     pdf.ln(5)
     
     col_widths = [13, 35, 16, 31, 15, 15, 17, 48] 
-    headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed
+    headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
+    pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
+    for i in range(len(headers)): pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C', fill=True)
+    pdf.ln()
+    
+    for r in final_data:
+        wrapped_remarks = textwrap.wrap(safe_str(r['Remarks']), width=36) or [""]
+        row_height = len(wrapped_remarks) * 6
+        if pdf.get_y() + row_height > 275:
+            pdf.add_page(); pdf.set_font("Arial", 'B', 8)
+            for i in range(len(headers)): pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C', fill=True)
+            pdf.ln()
+        
+        y_start = pdf.get_y(); temp_x = 10
+        type_str = str(r['Type']).strip()
+        
+        is_summary = "SUMMARY" in type_str.upper()
+        is_closing = "CLOSING BAL" in type_str
+        is_bounced = "BOUNCED" in type_str.upper() and not is_summary
+        
+        if is_summary or is_closing: 
+            pdf.set_fill_color(240, 245, 250); pdf.set_font("Arial", 'B', 7); pdf.set_text_color(0, 0, 0); fill_row = True
+        elif is_bounced: 
+            pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7); fill_row = False
+        else: 
+            pdf.set_font("Arial", size=7); pdf.set_text_color(0, 0, 0); fill_row = False
+            
+        style = 'DF' if fill_row else 'D'
+        
+        if is_summary:
+            merged_w = sum(col_widths[2:7])
+            pdf.rect(temp_x, y_start, col_widths[0], row_height, style)
+            pdf.rect(temp_x + col_widths[0], y_start, col_widths[1], row_height, style)
+            pdf.rect(temp_x + col_widths[0] + col_widths[1], y_start, merged_w, row_height, style)
+            pdf.rect(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height, style)
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
+            pdf.set_xy(temp_x + col_widths[0], y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
+            pdf.set_xy(temp_x + col_widths[0] + col_widths[1], y_start); pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
+            
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start + (i * 6))
+                pdf.cell(col_widths[7], 6, line, align='L')
+            pdf.set_y(y_start + row_height)
+            
+        else:
+            cur_rect_x = temp_x
+            for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, style); cur_rect_x += w
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L'); temp_x += col_widths[1]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C'); temp_x += col_widths[2]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:30], align='C'); temp_x += col_widths[3]
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R'); temp_x += col_widths[4]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R'); temp_x += col_widths[5]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R'); temp_x += col_widths[6]
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
+            pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
+        
+    if pending_invoices:
+        pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
+        pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
+        p_col_widths = [25, 40, 55, 35, 35]; p_headers = ["Date", "Doc No", "Type", "Billed (INR)", "Pending (INR)"]
+        pdf.set_font("Arial", 'B', 8)
+        for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
+        pdf.ln(); pdf.set_font("Arial", size=8); total_pending = 0.0
+        for p in pending_invoices:
+            if pdf.get_y() > 260: 
+                pdf.add_page()
+                pdf.set_font("Arial", 'B', 8)
+                pdf.set_fill_color(255, 204, 204)
+                for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
+                pdf.ln()
+                pdf.set_font("Arial", size=8)
+                
+            pdf.cell(p_col_widths[0], 6, safe_str(p['Date']), border=1, align='C')
+            pdf.cell(p_col_widths
