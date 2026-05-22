@@ -64,15 +64,12 @@ def process_pdf_logic(uploaded_file):
     for idx, row_text in enumerate(extracted_rows):
         row_upper = row_text.upper()
         
-        # ==== OPENING BALANCE CR/DR FIX ====
         if "OPENING BALANCE" in row_upper and not found_opening:
-            # Added tolerance for spaces inside brackets e.g. ( 9,981.00 )
             amounts = re.findall(r'-?\s*\(?\s*[\d,]+\.\d{2}\s*\)?', row_text)
             if amounts:
                 amount_str = amounts[-1]
                 is_cr = 'CR' in row_upper or '(' in amount_str or '-' in amount_str
                 
-                # Smart Look-ahead: If CR is on the next line
                 if not is_cr:
                     for offset in range(1, 3):
                         if idx + offset < len(extracted_rows):
@@ -81,7 +78,7 @@ def process_pdf_logic(uploaded_file):
                                 is_cr = True
                                 break
                             elif re.search(r'\d', next_line):
-                                break # Stop searching if we hit the next transaction
+                                break 
                                 
                 val = float(re.sub(r'[^\d.]', '', amount_str))
                 opening_balance = val
@@ -352,8 +349,9 @@ def process_pdf_logic(uploaded_file):
                 doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
                 if is_debit_entry:
+                    # ==== THE ULTIMATE FIX: ADD back the amount to pending balances instead of subtracting! ====
                     if doc_no in inv_balances:
-                        inv_balances[doc_no] -= amt
+                        inv_balances[doc_no] += amt 
                     
                     if doc_no and (doc_no.startswith(('22', '3', '4', '9')) or "Return" in doc_category or "Credit Note" in doc_category):
                         r["Type"] = ">> System Adj (Reconciliation)"
@@ -361,7 +359,7 @@ def process_pdf_logic(uploaded_file):
                     elif doc_no and doc_no.startswith('000'):
                         r["Type"] = "Advance Utilized (Reconciliation)"
                         if doc_no in adv_balances:
-                            adv_balances[doc_no] -= amt
+                            adv_balances[doc_no] -= amt # Advance decreases when utilized, so this stays -=
                             rem_adv_bal = adv_balances[doc_no]
                             r["Remarks"] = f"Deducted from Adv: {doc_no} | Rem Adv Bal: {int(rem_adv_bal):,}"
                         else:
