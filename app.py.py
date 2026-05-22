@@ -141,11 +141,28 @@ def process_pdf_logic(uploaded_file):
 
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": "", "Remarks": remarks})
 
+    # ==== SMART SORTING LOGIC ====
     if final_data:
         reordered_data = []
         current_date = None
         date_block = []
         
+        def row_sort_key(x):
+            t = x.get('Type', '')
+            # 0: Invoices/CNs
+            if 'OPENING BAL' in t: 
+                return (0, '', 0)
+            # 1: Payments & Bounced
+            elif 'PAYMENT' in t or 'BOUNCED' in t: 
+                return (1, str(x.get('Chq No', '')), 0)
+            # 2: Reconciliations (Grouped by Amount, Debit before Credit)
+            elif 'Reconciliation' in t:
+                amt = float(x['Debit']) if x['Debit'] != "" else (float(x['Credit']) if x['Credit'] != "" else 0.0)
+                is_cr = 1 if x['Credit'] != "" else 0
+                return (2, str(amt), is_cr)
+            else:
+                return (0, '', 1) 
+
         for r in final_data:
             if r['Type'] == 'OPENING BAL':
                 reordered_data.append(r)
@@ -153,7 +170,7 @@ def process_pdf_logic(uploaded_file):
                 
             if r['Date'] != current_date:
                 if date_block:
-                    date_block.sort(key=lambda x: str(x.get('Chq No', '')) if ('PAYMENT' in x.get('Type', '') or 'BOUNCED' in x.get('Type', '')) else '')
+                    date_block.sort(key=row_sort_key)
                     reordered_data.extend(date_block)
                 current_date = r['Date']
                 date_block = [r]
@@ -161,11 +178,12 @@ def process_pdf_logic(uploaded_file):
                 date_block.append(r)
                 
         if date_block:
-            date_block.sort(key=lambda x: str(x.get('Chq No', '')) if ('PAYMENT' in x.get('Type', '') or 'BOUNCED' in x.get('Type', '')) else '')
+            date_block.sort(key=row_sort_key)
             reordered_data.extend(date_block)
             
         final_data = reordered_data
         
+        # ==== RECALCULATE RUNNING BALANCE ====
         current_bal = opening_balance
         for r in final_data:
             if r['Type'] == 'OPENING BAL':
@@ -385,6 +403,10 @@ def process_pdf_logic(uploaded_file):
             else:
                 if "Goods Return Invoice" in r["Type"]:
                     r["Remarks"] = "Material Returned by Customer"
+                elif "Credit Note(Brakage Expiry)" in r["Type"]:
+                    r["Remarks"] = "Credit Note Issued for Breakage/Expiry"
+                elif "Credit Note(Others)" in r["Type"]:
+                    r["Remarks"] = "Credit Note Issued (Others)"
                 grouped_data.append(r)
 
         final_data = grouped_data
