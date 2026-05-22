@@ -241,7 +241,8 @@ def process_pdf_logic(uploaded_file):
                 
                 if r["Chq No"]:
                     key = r["Chq No"]
-                    if chq_stats[key]['count'] > 1:
+                    # Changed from > 1 to >= 1 to show summary for every single cheque
+                    if chq_stats[key]['count'] >= 1:
                         chq_stats[key]['seen'] += 1
                         if chq_stats[key]['seen'] == chq_stats[key]['count']:
                             total_c = chq_stats[key]['total_c']
@@ -488,7 +489,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     if pending_invoices:
         pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
         pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
-        # Age (Days) is removed, col widths adjusted to sum to 190
         p_col_widths = [25, 40, 55, 35, 35]; p_headers = ["Date", "Doc No", "Type", "Billed (INR)", "Pending (INR)"]
         pdf.set_font("Arial", 'B', 8)
         for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
@@ -537,7 +537,6 @@ def get_excel_download(final_data, header_info, summary_info, dash_info, pending
         
         if pending_invoices:
             start_row_pending = start_main + len(excel_data) + 3
-            # Excel Heading changed to remove '(with Aging)'
             pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
             pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
     return output.getvalue()
