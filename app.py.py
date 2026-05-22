@@ -139,10 +139,8 @@ def process_pdf_logic(uploaded_file):
             elif s_type == "TECHNICAL BOUNCED": tech_b += val
             elif s_type == "NON TECHNICAL BOUNCED": n_tech_b += val
 
-            # Balance initially left as empty to be recalculated after sorting
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": "", "Remarks": remarks})
 
-    # ==== SMART SORTING LOGIC FOR SAME-DATE CHEQUES ====
     if final_data:
         reordered_data = []
         current_date = None
@@ -155,8 +153,7 @@ def process_pdf_logic(uploaded_file):
                 
             if r['Date'] != current_date:
                 if date_block:
-                    # Sort only payments with cheque numbers, leave everything else in original order
-                    date_block.sort(key=lambda x: str(x.get('Chq No', '')) if 'PAYMENT' in x.get('Type', '') else '')
+                    date_block.sort(key=lambda x: str(x.get('Chq No', '')) if ('PAYMENT' in x.get('Type', '') or 'BOUNCED' in x.get('Type', '')) else '')
                     reordered_data.extend(date_block)
                 current_date = r['Date']
                 date_block = [r]
@@ -164,12 +161,11 @@ def process_pdf_logic(uploaded_file):
                 date_block.append(r)
                 
         if date_block:
-            date_block.sort(key=lambda x: str(x.get('Chq No', '')) if 'PAYMENT' in x.get('Type', '') else '')
+            date_block.sort(key=lambda x: str(x.get('Chq No', '')) if ('PAYMENT' in x.get('Type', '') or 'BOUNCED' in x.get('Type', '')) else '')
             reordered_data.extend(date_block)
             
         final_data = reordered_data
         
-        # ==== RECALCULATE RUNNING BALANCE ====
         current_bal = opening_balance
         for r in final_data:
             if r['Type'] == 'OPENING BAL':
@@ -183,7 +179,6 @@ def process_pdf_logic(uploaded_file):
         running_balance = current_bal
 
     if final_data:
-        # Bounced Cheque Match Logic
         for i in range(len(final_data)):
             if "BOUNCED" in final_data[i]["Type"] and final_data[i]["Chq No"] == "":
                 b_amt = final_data[i]["Debit"] if final_data[i]["Debit"] != "" else final_data[i]["Credit"]
@@ -240,17 +235,27 @@ def process_pdf_logic(uploaded_file):
                         reconc_return_debits_by_date[dt].append(d_val)
 
         chq_stats = {}
+        bounced_stats = {}
+        
         for r in final_data:
-            if "PAYMENT" in r["Type"] and r["Chq No"]:
-                # KEY MODIFIED TO TRACK SUMMARY PER DATE + CHQ
+            if r.get("Chq No"):
                 key = (r["Date"], r["Chq No"])
                 c_amt = float(r["Credit"]) if r["Credit"] != "" else 0.0
                 d_amt = float(r["Debit"]) if r["Debit"] != "" else 0.0
-                if key not in chq_stats:
-                    chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0}
-                chq_stats[key]['total_c'] += c_amt
-                chq_stats[key]['total_d'] += d_amt
-                chq_stats[key]['count'] += 1
+                
+                if "PAYMENT" in r["Type"]:
+                    if key not in chq_stats:
+                        chq_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0}
+                    chq_stats[key]['total_c'] += c_amt
+                    chq_stats[key]['total_d'] += d_amt
+                    chq_stats[key]['count'] += 1
+                
+                elif "BOUNCED" in r["Type"]:
+                    if key not in bounced_stats:
+                        bounced_stats[key] = {'total_c': 0.0, 'total_d': 0.0, 'count': 0, 'seen': 0}
+                    bounced_stats[key]['total_c'] += c_amt
+                    bounced_stats[key]['total_d'] += d_amt
+                    bounced_stats[key]['count'] += 1
 
         grouped_data = []
         for r in final_data:
@@ -282,7 +287,7 @@ def process_pdf_logic(uploaded_file):
                 
                 if r["Chq No"]:
                     key = (r["Date"], r["Chq No"])
-                    if chq_stats[key]['count'] >= 1:
+                    if key in chq_stats and chq_stats[key]['count'] >= 1:
                         chq_stats[key]['seen'] += 1
                         if chq_stats[key]['seen'] == chq_stats[key]['count']:
                             total_c = chq_stats[key]['total_c']
@@ -291,9 +296,27 @@ def process_pdf_logic(uploaded_file):
                             total_adj = total_c if total_c > total_d else total_d
                             
                             grouped_data.append({
-                                "Date": "", "Type": "-> CHQ SUMMARY", "Doc No": "", "Chq No": key[1],  
+                                "Date": "", "Type": "-> CHQ/NEFT SUMMARY", "Doc No": "", "Chq No": key[1],  
                                 "Debit": "", "Credit": "", "Balance": "", 
                                 "Remarks": f"Total Inv Adj: {int(total_adj):,} | Total Chq/NEFT Amt: {int(net_amt):,}"
+                            })
+
+            elif "BOUNCED" in r["Type"]:
+                grouped_data.append(r)
+                
+                if r["Chq No"]:
+                    key = (r["Date"], r["Chq No"])
+                    if key in bounced_stats and bounced_stats[key]['count'] >= 1:
+                        bounced_stats[key]['seen'] += 1
+                        if bounced_stats[key]['seen'] == bounced_stats[key]['count']:
+                            total_c = bounced_stats[key]['total_c']
+                            total_d = bounced_stats[key]['total_d']
+                            net_amt = abs(total_c - total_d)
+                            
+                            grouped_data.append({
+                                "Date": "", "Type": "-> BOUNCED CHQ/NEFT SUMMARY", "Doc No": "", "Chq No": key[1],  
+                                "Debit": "", "Credit": "", "Balance": "", 
+                                "Remarks": f"Total Bounced Chq/NEFT Amt: {int(net_amt):,}"
                             })
 
             elif "Reconciliation" in r["Type"]:
@@ -478,14 +501,14 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
         y_start = pdf.get_y(); temp_x = 10
         type_str = str(r['Type']).strip()
         
-        is_summary = "-> CHQ SUMMARY" in type_str
+        is_summary = "SUMMARY" in type_str.upper()
         is_closing = "CLOSING BAL" in type_str
-        is_bounced = "BOUNCED" in type_str.upper()
+        is_bounced = "BOUNCED" in type_str.upper() and not is_summary
         
-        if is_bounced: 
-            pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7); fill_row = False
-        elif is_summary or is_closing: 
+        if is_summary or is_closing: 
             pdf.set_fill_color(240, 245, 250); pdf.set_font("Arial", 'B', 7); pdf.set_text_color(0, 0, 0); fill_row = True
+        elif is_bounced: 
+            pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7); fill_row = False
         else: 
             pdf.set_font("Arial", size=7); pdf.set_text_color(0, 0, 0); fill_row = False
             
