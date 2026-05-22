@@ -261,7 +261,6 @@ def process_pdf_logic(uploaded_file):
                 doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
                 if is_debit_entry:
-                    # --- NEW FIX: Reduce Credit Note / Return balance when utilized! ---
                     if doc_no in inv_balances:
                         inv_balances[doc_no] -= amt
                     
@@ -332,11 +331,6 @@ def process_pdf_logic(uploaded_file):
         for doc, pending_amt in inv_balances.items():
             if pending_amt > 0.5:
                 details = doc_details_for_pending.get(doc, {"Date": "01/01/00", "Type": "Invoice", "Amt": pending_amt})
-                age_days = "N/A"
-                try:
-                    inv_date_obj = datetime.datetime.strptime(details["Date"], "%d/%m/%y").date()
-                    age_days = (today_date - inv_date_obj).days
-                except: pass
                 
                 is_credit_doc = doc.startswith(('3', '4', '9')) or "Credit Note" in details["Type"] or "Goods Return" in details["Type"]
                 disp_billed = -details["Amt"] if is_credit_doc else details["Amt"]
@@ -344,8 +338,7 @@ def process_pdf_logic(uploaded_file):
                 
                 pending_invoices.append({
                     "Date": details["Date"], "Doc No": doc, "Type": details["Type"],
-                    "Billed Amt": disp_billed, "Pending Amt": round(disp_pending, 2),
-                    "Age (Days)": age_days
+                    "Billed Amt": disp_billed, "Pending Amt": round(disp_pending, 2)
                 })
                 total_pending_amt += disp_pending
 
@@ -367,20 +360,49 @@ def process_pdf_logic(uploaded_file):
 
 def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
     from fpdf import FPDF
+    
+    # Custom PDF class for dynamic headers on every page
     class PDF(FPDF):
+        def header(self):
+            def safe_str(s): return str(s).encode('latin1', 'ignore').decode('latin1')
+            logo_file = next((f for f in ["logo.png", "Logo.png", "logo.jpg"] if os.path.exists(f)), None)
+            if logo_file: 
+                self.image(logo_file, x=85, y=5, w=40)
+                self.ln(15)
+            else: 
+                self.ln(5)
+            
+            # Use instance variables securely
+            h_info = getattr(self, 'h_info', {'Time':'', 'Period':'', 'CustomerNo':'', 'CustomerName':''})
+            m_name = getattr(self, 'm_name', '')
+            c_name = getattr(self, 'c_name', '')
+            
+            cust_name = m_name if m_name.strip() else h_info.get('CustomerName', '')
+            cfa_text = f" | CFA Name: {c_name}" if c_name.strip() else ""
+            
+            self.set_font("Arial", 'B', 13)
+            self.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
+            self.set_font("Arial", size=10)
+            self.cell(190, 6, txt=safe_str(f"Time: {h_info.get('Time','')} | Period: {h_info.get('Period','')}"), ln=True, align='C')
+            self.cell(190, 6, txt=safe_str(f"Customer No: {h_info.get('CustomerNo','')} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C')
+            self.ln(5)
+
         def footer(self):
-            self.set_y(-15); self.set_font('Arial', 'I', 9)
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 9)
             self.cell(0, 10, f'Page {self.page_no()} of {{nb}}', 0, 0, 'C')
-    pdf = PDF(); pdf.alias_nb_pages(); pdf.set_auto_page_break(auto=False); pdf.add_page()
+
+    pdf = PDF()
+    # Explicitly map the variables to the pdf object for the header function
+    pdf.h_info = header_info
+    pdf.m_name = manual_name
+    pdf.c_name = cfa_name
+    
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=False)
+    pdf.add_page()
+    
     def safe_str(s): return str(s).encode('latin1', 'ignore').decode('latin1')
-    logo_file = next((f for f in ["logo.png", "Logo.png", "logo.jpg"] if os.path.exists(f)), None)
-    if logo_file: pdf.image(logo_file, x=85, y=5, w=40); pdf.ln(15)
-    else: pdf.ln(5)
-    cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
-    cfa_text = f" | CFA Name: {cfa_name}" if cfa_name.strip() else ""
-    pdf.set_font("Arial", 'B', 13); pdf.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
-    pdf.set_font("Arial", size=10); pdf.cell(190, 6, txt=safe_str(f"Time: {header_info['Time']} | Period: {header_info['Period']}"), ln=True, align='C')
-    pdf.cell(190, 6, txt=safe_str(f"Customer No: {header_info['CustomerNo']} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C'); pdf.ln(5)
     
     dash_w = 190 / 5; dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(220, 235, 255)
@@ -466,25 +488,30 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     if pending_invoices:
         pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
         pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
-        p_col_widths = [20, 35, 45, 30, 30, 30]; p_headers = ["Date", "Doc No", "Type", "Billed (INR)", "Pending (INR)", "Age (Days)"]
+        # Age (Days) is removed, col widths adjusted to sum to 190
+        p_col_widths = [25, 40, 55, 35, 35]; p_headers = ["Date", "Doc No", "Type", "Billed (INR)", "Pending (INR)"]
         pdf.set_font("Arial", 'B', 8)
-        for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C')
+        for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
         pdf.ln(); pdf.set_font("Arial", size=8); total_pending = 0.0
         for p in pending_invoices:
-            if pdf.get_y() > 260: pdf.add_page()
+            if pdf.get_y() > 260: 
+                pdf.add_page()
+                pdf.set_font("Arial", 'B', 8)
+                pdf.set_fill_color(255, 204, 204)
+                for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
+                pdf.ln()
+                pdf.set_font("Arial", size=8)
+                
             pdf.cell(p_col_widths[0], 6, safe_str(p['Date']), border=1, align='C')
             pdf.cell(p_col_widths[1], 6, safe_str(p['Doc No']), border=1, align='C')
             pdf.cell(p_col_widths[2], 6, safe_str(p['Type'])[:25], border=1, align='C')
             pdf.cell(p_col_widths[3], 6, f"{int(float(p['Billed Amt'])):,}", border=1, align='R')
             pdf.cell(p_col_widths[4], 6, f"{int(float(p['Pending Amt'])):,}", border=1, align='R')
-            
-            if isinstance(p['Age (Days)'], int) and p['Age (Days)'] > 30: pdf.set_font("Arial", 'B', 8)
-            pdf.cell(p_col_widths[5], 6, safe_str(p['Age (Days)']), border=1, align='C'); pdf.set_font("Arial", size=8)
-            pdf.ln(); total_pending += p['Pending Amt']
+            pdf.ln()
+            total_pending += p['Pending Amt']
             
         pdf.set_font("Arial", 'B', 8); pdf.cell(sum(p_col_widths[:4]), 6, "Total Outstanding:", border=1, align='R')
-        pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, align='R')
-        pdf.cell(p_col_widths[5], 6, "", border=1, ln=True)
+        pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, ln=True, align='R')
 
     if pdf.get_y() > 240: pdf.add_page()
     pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.set_text_color(100, 100, 100)
@@ -510,7 +537,8 @@ def get_excel_download(final_data, header_info, summary_info, dash_info, pending
         
         if pending_invoices:
             start_row_pending = start_main + len(excel_data) + 3
-            pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY (with Aging)"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
+            # Excel Heading changed to remove '(with Aging)'
+            pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
             pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
     return output.getvalue()
 
