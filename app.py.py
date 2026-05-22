@@ -141,7 +141,7 @@ def process_pdf_logic(uploaded_file):
 
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": "", "Remarks": remarks})
 
-    # ==== SMART SORTING LOGIC ====
+    # ==== SMART SORTING LOGIC FIXED ====
     if final_data:
         reordered_data = []
         current_date = None
@@ -149,19 +149,16 @@ def process_pdf_logic(uploaded_file):
         
         def row_sort_key(x):
             t = x.get('Type', '')
-            # 0: Invoices/CNs
             if 'OPENING BAL' in t: 
                 return (0, '', 0)
-            # 1: Payments & Bounced
             elif 'PAYMENT' in t or 'BOUNCED' in t: 
-                return (1, str(x.get('Chq No', '')), 0)
-            # 2: Reconciliations (Grouped by Amount, Debit before Credit)
+                return (2, str(x.get('Chq No', '')), 0)
             elif 'Reconciliation' in t:
-                amt = float(x['Debit']) if x['Debit'] != "" else (float(x['Credit']) if x['Credit'] != "" else 0.0)
-                is_cr = 1 if x['Credit'] != "" else 0
-                return (2, str(amt), is_cr)
+                # 0 for Debit (so they appear first), 1 for Credit
+                is_cr = 1 if str(x.get('Credit', '')) != "" else 0
+                return (3, str(is_cr), 0)
             else:
-                return (0, '', 1) 
+                return (1, '', 0) # Invoices, Credit Notes, etc.
 
         for r in final_data:
             if r['Type'] == 'OPENING BAL':
