@@ -124,7 +124,6 @@ def process_pdf_logic(uploaded_file):
                             chq_no = token; break
 
             debit, credit = (val, 0.0) if not is_cr else (0.0, val)
-            running_balance += (debit - credit)
             total_billed_dr += debit
             total_paid_cr += credit
 
@@ -140,7 +139,48 @@ def process_pdf_logic(uploaded_file):
             elif s_type == "TECHNICAL BOUNCED": tech_b += val
             elif s_type == "NON TECHNICAL BOUNCED": n_tech_b += val
 
-            final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": round(running_balance, 2), "Remarks": remarks})
+            # Balance initially left as empty to be recalculated after sorting
+            final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": "", "Remarks": remarks})
+
+    # ==== SMART SORTING LOGIC FOR SAME-DATE CHEQUES ====
+    if final_data:
+        reordered_data = []
+        current_date = None
+        date_block = []
+        
+        for r in final_data:
+            if r['Type'] == 'OPENING BAL':
+                reordered_data.append(r)
+                continue
+                
+            if r['Date'] != current_date:
+                if date_block:
+                    # Sort only payments with cheque numbers, leave everything else in original order
+                    date_block.sort(key=lambda x: str(x.get('Chq No', '')) if 'PAYMENT' in x.get('Type', '') else '')
+                    reordered_data.extend(date_block)
+                current_date = r['Date']
+                date_block = [r]
+            else:
+                date_block.append(r)
+                
+        if date_block:
+            date_block.sort(key=lambda x: str(x.get('Chq No', '')) if 'PAYMENT' in x.get('Type', '') else '')
+            reordered_data.extend(date_block)
+            
+        final_data = reordered_data
+        
+        # ==== RECALCULATE RUNNING BALANCE ====
+        current_bal = opening_balance
+        for r in final_data:
+            if r['Type'] == 'OPENING BAL':
+                r['Balance'] = round(current_bal, 2)
+                continue
+            d = float(r['Debit']) if r['Debit'] != "" else 0.0
+            c = float(r['Credit']) if r['Credit'] != "" else 0.0
+            current_bal += (d - c)
+            r['Balance'] = round(current_bal, 2)
+            
+        running_balance = current_bal
 
     if final_data:
         # Bounced Cheque Match Logic
@@ -202,7 +242,8 @@ def process_pdf_logic(uploaded_file):
         chq_stats = {}
         for r in final_data:
             if "PAYMENT" in r["Type"] and r["Chq No"]:
-                key = r["Chq No"]
+                # KEY MODIFIED TO TRACK SUMMARY PER DATE + CHQ
+                key = (r["Date"], r["Chq No"])
                 c_amt = float(r["Credit"]) if r["Credit"] != "" else 0.0
                 d_amt = float(r["Debit"]) if r["Debit"] != "" else 0.0
                 if key not in chq_stats:
@@ -240,8 +281,7 @@ def process_pdf_logic(uploaded_file):
                 grouped_data.append(r)
                 
                 if r["Chq No"]:
-                    key = r["Chq No"]
-                    # Changed from > 1 to >= 1 to show summary for every single cheque
+                    key = (r["Date"], r["Chq No"])
                     if chq_stats[key]['count'] >= 1:
                         chq_stats[key]['seen'] += 1
                         if chq_stats[key]['seen'] == chq_stats[key]['count']:
@@ -251,7 +291,7 @@ def process_pdf_logic(uploaded_file):
                             total_adj = total_c if total_c > total_d else total_d
                             
                             grouped_data.append({
-                                "Date": "", "Type": "-> CHQ SUMMARY", "Doc No": "", "Chq No": key,  
+                                "Date": "", "Type": "-> CHQ SUMMARY", "Doc No": "", "Chq No": key[1],  
                                 "Debit": "", "Credit": "", "Balance": "", 
                                 "Remarks": f"Total Inv Adj: {int(total_adj):,} | Total Chq/NEFT Amt: {int(net_amt):,}"
                             })
@@ -362,7 +402,6 @@ def process_pdf_logic(uploaded_file):
 def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
     from fpdf import FPDF
     
-    # Custom PDF class for dynamic headers on every page
     class PDF(FPDF):
         def header(self):
             def safe_str(s): return str(s).encode('latin1', 'ignore').decode('latin1')
@@ -373,7 +412,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             else: 
                 self.ln(5)
             
-            # Use instance variables securely
             h_info = getattr(self, 'h_info', {'Time':'', 'Period':'', 'CustomerNo':'', 'CustomerName':''})
             m_name = getattr(self, 'm_name', '')
             c_name = getattr(self, 'c_name', '')
@@ -394,7 +432,6 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             self.cell(0, 10, f'Page {self.page_no()} of {{nb}}', 0, 0, 'C')
 
     pdf = PDF()
-    # Explicitly map the variables to the pdf object for the header function
     pdf.h_info = header_info
     pdf.m_name = manual_name
     pdf.c_name = cfa_name
