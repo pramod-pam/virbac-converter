@@ -349,7 +349,6 @@ def process_pdf_logic(uploaded_file):
                 doc_category = doc_details_for_pending.get(doc_no, {}).get("Type", "")
                 
                 if is_debit_entry:
-                    # ==== THE ULTIMATE FIX: ADD back the amount to pending balances instead of subtracting! ====
                     if doc_no in inv_balances:
                         inv_balances[doc_no] += amt 
                     
@@ -359,7 +358,7 @@ def process_pdf_logic(uploaded_file):
                     elif doc_no and doc_no.startswith('000'):
                         r["Type"] = "Advance Utilized (Reconciliation)"
                         if doc_no in adv_balances:
-                            adv_balances[doc_no] -= amt # Advance decreases when utilized, so this stays -=
+                            adv_balances[doc_no] -= amt 
                             rem_adv_bal = adv_balances[doc_no]
                             r["Remarks"] = f"Deducted from Adv: {doc_no} | Rem Adv Bal: {int(rem_adv_bal):,}"
                         else:
@@ -444,9 +443,21 @@ def process_pdf_logic(uploaded_file):
             ("TECHNICAL BOUNCED", tech_b), ("NON TECHNICAL BOUNCED", n_tech_b), ("CLOSING BAL", running_balance)
         ]
         
+        # ==== NEW CRITICAL FIX: Add Unadjusted Advance row INSIDE the pending list as negative (-) row ====
+        unadj_adv = total_pending_amt - running_balance
+        if abs(unadj_adv) > 0.5:
+            pending_invoices.append({
+                "Date": "",
+                "Doc No": "ADVANCE",
+                "Type": "Unadjusted Advance",
+                "Billed Amt": -round(unadj_adv, 2),
+                "Pending Amt": -round(unadj_adv, 2)
+            })
+        
         dash_info = {
             "Opening Bal": opening_balance, "Billed (Dr)": total_billed_dr, 
-            "Paid / Adj (Cr)": total_paid_cr, "Closing Bal": running_balance, "Total Pending": total_pending_amt
+            "Paid / Adj (Cr)": total_paid_cr, "Closing Bal": running_balance, 
+            "Total Pending": total_pending_amt, "Unadjusted Adv": unadj_adv
         }
         return final_data, header_info, summary_info, dash_info, pending_invoices, None
     return None, None, None, None, None, "Data sapadla nahi."
@@ -494,13 +505,13 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
     
     def safe_str(s): return str(s).encode('latin1', 'ignore').decode('latin1')
     
-    dash_w = 190 / 5; dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending"]
+    dash_w = 190 / 6; dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending", "Unadjusted Adv"]
     pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(220, 235, 255)
     for h in dash_headers: pdf.cell(dash_w, 6, safe_str(h), border=1, align='C', fill=True)
     pdf.ln(); pdf.set_font("Arial", 'B', 9)
-    dash_vals = [f"{int(dash_info['Opening Bal']):,}", f"{int(dash_info['Billed (Dr)']):,}", f"{int(dash_info['Paid / Adj (Cr)']):,}", f"{int(dash_info['Closing Bal']):,}", f"{int(dash_info['Total Pending']):,}"]
+    dash_vals = [f"{int(dash_info['Opening Bal']):,}", f"{int(dash_info['Billed (Dr)']):,}", f"{int(dash_info['Paid / Adj (Cr)']):,}", f"{int(dash_info['Closing Bal']):,}", f"{int(dash_info['Total Pending']):,}", f"{int(dash_info['Unadjusted Adv']):,}"]
     for i, v in enumerate(dash_vals):
-        if i == 4: pdf.set_text_color(200, 0, 0)
+        if i == 4 or i == 5: pdf.set_text_color(200, 0, 0)
         pdf.cell(dash_w, 8, safe_str(v), border=1, align='C'); pdf.set_text_color(0, 0, 0)
     pdf.ln(8)
     
@@ -594,8 +605,8 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             pdf.cell(p_col_widths[0], 6, safe_str(p['Date']), border=1, align='C')
             pdf.cell(p_col_widths[1], 6, safe_str(p['Doc No']), border=1, align='C')
             pdf.cell(p_col_widths[2], 6, safe_str(p['Type'])[:25], border=1, align='C')
-            pdf.cell(p_col_widths[3], 6, f"{int(float(p['Billed Amt'])):,}", border=1, align='R')
-            pdf.cell(p_col_widths[4], 6, f"{int(float(p['Pending Amt'])):,}", border=1, align='R')
+            pdf.cell(p_col_widths[3], 6, f"{int(float(p['Billed Amt'])):,}" if str(p['Billed Amt']) != "" else "", border=1, align='R')
+            pdf.cell(p_col_widths[4], 6, f"{int(float(p['Pending Amt'])):,}" if str(p['Pending Amt']) != "" else "", border=1, align='R')
             pdf.ln()
             total_pending += p['Pending Amt']
             
@@ -617,7 +628,7 @@ def get_excel_download(final_data, header_info, summary_info, dash_info, pending
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         pd.DataFrame([["Report Time:", header_info["Time"]], ["Heading:", "STATEMENT OF ACCOUNT"], ["Period:", header_info["Period"]], ["Customer No:", header_info["CustomerNo"]], ["Customer Name:", cust_name], ["CFA Name:", cfa_name]]).to_excel(writer, sheet_name='Statement', index=False, header=False)
         
-        pd.DataFrame([["Opening Bal", "Billed (Dr)", "Paid / Adj (Cr)", "Closing Bal", "Total Pending"], [dash_info['Opening Bal'], dash_info['Billed (Dr)'], dash_info['Paid / Adj (Cr)'], dash_info['Closing Bal'], dash_info['Total Pending']]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=8)
+        pd.DataFrame([["Opening Bal", "Billed (Dr)", "Paid / Adj (Cr)", "Closing Bal", "Total Pending", "Unadjusted Adv"], [dash_info['Opening Bal'], dash_info['Billed (Dr)'], dash_info['Paid / Adj (Cr)'], dash_info['Closing Bal'], dash_info['Total Pending'], dash_info['Unadjusted Adv']]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=8)
         
         pd.DataFrame(summary_info, columns=["Transaction Type", "Amount (INR)"]).to_excel(writer, sheet_name='Statement', index=False, startrow=12)
         
@@ -637,12 +648,15 @@ if uploaded_files:
         else:
             st.success(f"✅ {file.name} ready!")
             st.write("### 📊 Dashboard Summary")
-            c1, c2, c3, c4, c5 = st.columns(5)
+            
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
             c1.metric("Opening Bal", f"₹ {int(dash_info['Opening Bal']):,}")
             c2.metric("Billed (Dr)", f"₹ {int(dash_info['Billed (Dr)']):,}")
             c3.metric("Paid (Cr)", f"₹ {int(dash_info['Paid / Adj (Cr)']):,}")
             c4.metric("Closing Bal", f"₹ {int(dash_info['Closing Bal']):,}")
             c5.metric("Total Pending", f"₹ {int(dash_info['Total Pending']):,}", delta_color="inverse")
+            c6.metric("Unadjusted Adv", f"₹ {int(dash_info['Unadjusted Adv']):,}", delta_color="normal")
+            
             st.write("---")
             col_in1, col_in2 = st.columns(2)
             with col_in1: manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
