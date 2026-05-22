@@ -577,4 +577,110 @@ def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pend
             
             pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
             pdf.set_xy(temp_x + col_widths[0], y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
-            pdf.set_
+            pdf.set_xy(temp_x + col_widths[0] + col_widths[1], y_start); pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
+            
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start + (i * 6))
+                pdf.cell(col_widths[7], 6, line, align='L')
+            pdf.set_y(y_start + row_height)
+            
+        else:
+            cur_rect_x = temp_x
+            for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, style); cur_rect_x += w
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L'); temp_x += col_widths[1]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C'); temp_x += col_widths[2]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:30], align='C'); temp_x += col_widths[3]
+            
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R'); temp_x += col_widths[4]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R'); temp_x += col_widths[5]
+            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R'); temp_x += col_widths[6]
+            for i, line in enumerate(wrapped_remarks):
+                pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
+            pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
+        
+    if pending_invoices:
+        pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
+        pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
+        p_col_widths = [25, 40, 55, 35, 35]; p_headers = ["Date", "Doc No", "Type", "Billed (INR)", "Pending (INR)"]
+        pdf.set_font("Arial", 'B', 8)
+        for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
+        pdf.ln(); pdf.set_font("Arial", size=8); total_pending = 0.0
+        
+        for p in pending_invoices:
+            if pdf.get_y() > 260: 
+                pdf.add_page()
+                pdf.set_font("Arial", 'B', 8)
+                pdf.set_fill_color(255, 204, 204)
+                for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
+                pdf.ln()
+                pdf.set_font("Arial", size=8)
+            
+            b_amt_str = f"{int(float(p['Billed Amt'])):,}" if str(p['Billed Amt']) != "" else ""
+            p_amt_str = f"{int(float(p['Pending Amt'])):,}" if str(p['Pending Amt']) != "" else ""
+                
+            pdf.cell(p_col_widths[0], 6, safe_str(p['Date']), border=1, align='C')
+            pdf.cell(p_col_widths[1], 6, safe_str(p['Doc No']), border=1, align='C')
+            pdf.cell(p_col_widths[2], 6, safe_str(p['Type'])[:25], border=1, align='C')
+            pdf.cell(p_col_widths[3], 6, b_amt_str, border=1, align='R')
+            pdf.cell(p_col_widths[4], 6, p_amt_str, border=1, align='R')
+            pdf.ln()
+            total_pending += p['Pending Amt']
+            
+        pdf.set_font("Arial", 'B', 8); pdf.cell(sum(p_col_widths[:4]), 6, "Total Outstanding:", border=1, align='R')
+        pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, ln=True, align='R')
+
+    if pdf.get_y() > 240: pdf.add_page()
+    pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.set_text_color(100, 100, 100)
+    pdf.multi_cell(190, 5, safe_str("Note: This is a computer generated statement. If you have any queries or discrepancies regarding this statement, please contact our CFA / Accounts team within 7 days of receipt. Thank you for your business!"), align='L')
+    pdf.ln(5); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", 'B', 11)
+    pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True); pdf.ln(5)
+    if cfa_name.strip(): pdf.cell(190, 6, safe_str(f"Authorized Signatory: {cfa_name}"), ln=True)
+    pdf.ln(5); pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
+    return bytes(pdf.output(dest='S').encode('latin1', 'ignore'))
+
+def get_excel_download(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
+    output = io.BytesIO(); cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
+    excel_data = [{"Date": r["Date"], "Type": r["Type"], "Doc No": r["Doc No"], "Chq/NEFT No": r["Chq No"], "Billed Amt (Dr)": r["Debit"], "Paid Amt (Cr)": r["Credit"], "Balance": r["Balance"], "Remarks": r["Remarks"]} for r in final_data]
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        pd.DataFrame([["Report Time:", header_info["Time"]], ["Heading:", "STATEMENT OF ACCOUNT"], ["Period:", header_info["Period"]], ["Customer No:", header_info["CustomerNo"]], ["Customer Name:", cust_name], ["CFA Name:", cfa_name]]).to_excel(writer, sheet_name='Statement', index=False, header=False)
+        
+        pd.DataFrame([["Opening Bal", "Billed (Dr)", "Paid / Adj (Cr)", "Closing Bal", "Total Pending"], [dash_info['Opening Bal'], dash_info['Billed (Dr)'], dash_info['Paid / Adj (Cr)'], dash_info['Closing Bal'], dash_info['Total Pending']]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=8)
+        
+        pd.DataFrame(summary_info, columns=["Transaction Type", "Amount (INR)"]).to_excel(writer, sheet_name='Statement', index=False, startrow=12)
+        
+        start_main = 12 + len(summary_info) + 3
+        pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=start_main)
+        
+        if pending_invoices:
+            start_row_pending = start_main + len(excel_data) + 3
+            pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
+            pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
+    return output.getvalue()
+
+if uploaded_files:
+    for file in uploaded_files:
+        data, h_info, s_info, dash_info, pending_inv, err = process_pdf_logic(file)
+        if err: st.error(err)
+        else:
+            st.success(f"✅ {file.name} ready!")
+            st.write("### 📊 Dashboard Summary")
+            
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Opening Bal", f"₹ {int(dash_info['Opening Bal']):,}")
+            c2.metric("Billed (Dr)", f"₹ {int(dash_info['Billed (Dr)']):,}")
+            c3.metric("Paid (Cr)", f"₹ {int(dash_info['Paid / Adj (Cr)']):,}")
+            c4.metric("Closing Bal", f"₹ {int(dash_info['Closing Bal']):,}")
+            c5.metric("Total Pending", f"₹ {int(dash_info['Total Pending']):,}", delta_color="inverse")
+            
+            st.write("---")
+            col_in1, col_in2 = st.columns(2)
+            with col_in1: manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
+            with col_in2: cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
+            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"): st.session_state[f"ready_{file.name}"] = True
+            if st.session_state.get(f"ready_{file.name}", False):
+                st.write("---")
+                col1, col2 = st.columns(2)
+                with col1: st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
+                with col2: st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
