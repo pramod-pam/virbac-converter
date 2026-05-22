@@ -61,13 +61,28 @@ def process_pdf_logic(uploaded_file):
     total_billed_dr, total_paid_cr = 0.0, 0.0
     s_inv, pay, reco, c_oth, c_brk, g_ret, d_not, tcs, tds, tech_b, n_tech_b = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-    for row_text in extracted_rows:
+    for idx, row_text in enumerate(extracted_rows):
         row_upper = row_text.upper()
+        
+        # ==== OPENING BALANCE CR/DR FIX ====
         if "OPENING BALANCE" in row_upper and not found_opening:
-            amounts = re.findall(r'-?\(?[\d,]+\.\d{2}\)?', row_text)
+            # Added tolerance for spaces inside brackets e.g. ( 9,981.00 )
+            amounts = re.findall(r'-?\s*\(?\s*[\d,]+\.\d{2}\s*\)?', row_text)
             if amounts:
                 amount_str = amounts[-1]
                 is_cr = 'CR' in row_upper or '(' in amount_str or '-' in amount_str
+                
+                # Smart Look-ahead: If CR is on the next line
+                if not is_cr:
+                    for offset in range(1, 3):
+                        if idx + offset < len(extracted_rows):
+                            next_line = extracted_rows[idx + offset].upper().strip()
+                            if next_line == 'CR' or next_line == '(CR)' or next_line == 'CR.':
+                                is_cr = True
+                                break
+                            elif re.search(r'\d', next_line):
+                                break # Stop searching if we hit the next transaction
+                                
                 val = float(re.sub(r'[^\d.]', '', amount_str))
                 opening_balance = val
                 running_balance = -val if is_cr else val
@@ -141,7 +156,6 @@ def process_pdf_logic(uploaded_file):
 
             final_data.append({"Date": date, "Type": t_type, "Doc No": doc_no, "Chq No": chq_no, "Debit": debit if debit > 0 else "", "Credit": credit if credit > 0 else "", "Balance": "", "Remarks": remarks})
 
-    # ==== SMART SORTING LOGIC FIXED ====
     if final_data:
         reordered_data = []
         current_date = None
@@ -154,11 +168,10 @@ def process_pdf_logic(uploaded_file):
             elif 'PAYMENT' in t or 'BOUNCED' in t: 
                 return (2, str(x.get('Chq No', '')), 0)
             elif 'Reconciliation' in t:
-                # 0 for Debit (so they appear first), 1 for Credit
                 is_cr = 1 if str(x.get('Credit', '')) != "" else 0
                 return (3, str(is_cr), 0)
             else:
-                return (1, '', 0) # Invoices, Credit Notes, etc.
+                return (1, '', 0)
 
         for r in final_data:
             if r['Type'] == 'OPENING BAL':
@@ -180,8 +193,7 @@ def process_pdf_logic(uploaded_file):
             
         final_data = reordered_data
         
-        # ==== RECALCULATE RUNNING BALANCE ====
-        current_bal = opening_balance
+        current_bal = -opening_balance if final_data[0].get("Credit") else opening_balance
         for r in final_data:
             if r['Type'] == 'OPENING BAL':
                 r['Balance'] = round(current_bal, 2)
