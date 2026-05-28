@@ -9,12 +9,20 @@ import textwrap
 import itertools
 
 # Web app design
-st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", layout="wide")
+st.set_page_config(
+    page_title="Virbac Statement Converter", 
+    page_icon="📄", 
+    layout="wide"
+)
 
-st.title("📄 Virbac Account Statement Converter (Smart Tracking & Dashboards)")
-st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi format milva.")
+st.title("📄 Virbac Account Statement Converter (Smart Tracking)")
+st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi milva.")
 
-uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Yethe PDF file upload kara", 
+    type="pdf", 
+    accept_multiple_files=True
+)
 
 def process_pdf_logic(uploaded_file):
     run_datetime_obj = datetime.datetime.now()
@@ -28,8 +36,12 @@ def process_pdf_logic(uploaded_file):
             text_layout = first_page.extract_text(layout=True) or ""
             clean_text = " ".join(text_layout.split())
             
-            p_match = re.search(r'(?:Account.*?date|period from).*?(\d{2}/\d{2}/\d{2,4})\s*(?:to|-)\s*(\d{2}/\d{2}/\d{2,4})', clean_text, re.IGNORECASE)
-            if p_match: period = f"from {p_match.group(1)} To {p_match.group(2)}"
+            p_match = re.search(
+                r'(?:Account.*?date|period from).*?(\d{2}/\d{2}/\d{2,4})\s*(?:to|-)\s*(\d{2}/\d{2}/\d{2,4})', 
+                clean_text, re.IGNORECASE
+            )
+            if p_match: 
+                period = f"from {p_match.group(1)} To {p_match.group(2)}"
             
             c_match = re.search(r'(?:Payer|Customer No).*?(\d{6})', clean_text, re.IGNORECASE)
             if c_match: 
@@ -42,7 +54,12 @@ def process_pdf_logic(uploaded_file):
                                 candidate = lines[j].strip()
                                 cand_lower = candidate.lower()
                                 if len(candidate) < 4: continue
-                                if any(x in cand_lower for x in ['date', 'time', 'page', 'statement', 'accounting', 'period', 'payer', 'customer', 'limit', 'opening', 'bal', 'dt', 'balance']):
+                                ignore_keywords = [
+                                    'date', 'time', 'page', 'statement', 
+                                    'accounting', 'period', 'payer', 'customer', 
+                                    'limit', 'opening', 'bal', 'dt', 'balance'
+                                ]
+                                if any(x in cand_lower for x in ignore_keywords):
                                     continue
                                 customer_name = candidate
                                 break
@@ -55,56 +72,10 @@ def process_pdf_logic(uploaded_file):
         for page in pdf.pages:
             p_text = page.extract_text()
             if p_text:
-                for line in p_text.split('\n'): extracted_rows.append(line.strip())
+                for line in p_text.split('\n'): 
+                    extracted_rows.append(line.strip())
 
-    final_data, running_balance, opening_balance, found_opening = [], 0.0, 0.0, False
+    final_data, running_balance, opening_balance = [], 0.0, 0.0
+    found_opening = False
     total_billed_dr, total_paid_cr = 0.0, 0.0
-    s_inv, pay, reco, c_oth, c_brk, g_ret, d_not, tcs, tds, tech_b, n_tech_b = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-
-    for idx, row_text in enumerate(extracted_rows):
-        row_upper = row_text.upper()
-        
-        if "OPENING BALANCE" in row_upper and not found_opening:
-            amounts = re.findall(r'-?\s*\(?\s*[\d,]+\.\d{2}\s*\)?', row_text)
-            if amounts:
-                amount_str = amounts[-1]
-                is_cr = 'CR' in row_upper or '(' in amount_str or '-' in amount_str
-                
-                if not is_cr:
-                    for offset in range(1, 3):
-                        if idx + offset < len(extracted_rows):
-                            next_line = extracted_rows[idx + offset].upper().strip()
-                            if next_line == 'CR' or next_line == '(CR)' or next_line == 'CR.':
-                                is_cr = True
-                                break
-                            elif re.search(r'\d', next_line):
-                                break 
-                                
-                val = float(re.sub(r'[^\d.]', '', amount_str))
-                opening_balance = val
-                running_balance = -val if is_cr else val
-                found_opening = True
-                final_data.append({"Date": "", "Type": "OPENING BAL", "Doc No": "", "Chq No": "", "Debit": val if not is_cr else "", "Credit": val if is_cr else "", "Balance": round(running_balance, 2), "Remarks": ""})
-            continue
-
-        date_match = re.search(r'\b(\d{2}/\d{2}/\d{2})\b', row_text)
-        if date_match:
-            if any(x in row_upper for x in ["DATE:", "ACCOUNTING DATE", "TIME:", "PAGE"]): continue
-            date, amounts = date_match.group(1), re.findall(r'-?\(?[\d,]+\.\d{2}\)?', row_text)
-            if not amounts: continue
-            amount_str = amounts[-1]
-            is_cr = 'CR' in row_upper or '(' in amount_str or '-' in amount_str
-            val = float(re.sub(r'[^\d.]', '', amount_str))
-            if val == 0.0: continue
-            
-            doc_no_match = re.search(r'\b\d{9,10}\b', row_text)
-            doc_no = doc_no_match.group(0) if doc_no_match else ""
-            
-            t_type, s_type = "Other", "Other"
-            remarks = ""
-            
-            if ("TDSRECO" in row_upper and doc_no.startswith('000') and is_cr) or ("TDS CREDIT NOTE" in row_upper): 
-                t_type, s_type = "TDS Credit Note", "TDS Credit Note"
-            elif "CBOU199" in row_upper: 
-                t_type, s_type = "TECHNICAL BOUNCED", "TECHNICAL BOUNCED"
-            elif any(code in row_upper for code in ["CBOU101", "
+    s_inv, pay, reco, c_oth, c_brk, g_ret = 0.0, 0.
