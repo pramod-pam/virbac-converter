@@ -373,7 +373,6 @@ def process_pdf_logic(uploaded_file):
                     if not is_from_return:
                         ret_debits = reconc_return_debits_by_date.get(r["Date"], [])
                         if ret_debits:
-                            # BROKEN DOWN FOR SYNTAX SAFETY
                             sum_ret = sum(ret_debits)
                             diff_amt = abs(sum_ret - amt)
                             
@@ -399,13 +398,16 @@ def process_pdf_logic(uploaded_file):
                     else:
                         status_tag = ""
 
-                    if is_from_return:
+                    if doc_no and doc_no.startswith('000'):
+                        r["Type"] = ">> Advance Carried Forward"
+                        r["Remarks"] = f"Advance Carried Forward: {doc_no} | Amt: {int(amt):,}"
+                    elif is_from_return:
                         r["Type"] = ">> Bill Settled (Reconciliation)"
                         orig_amt = doc_amounts.get(doc_no, None)
                         orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                         r["Remarks"] = f"Bill Settled Against Return | Inv: {doc_no}{orig_amt_str} | Adj: {int(amt):,}{status_tag}"
                     else:
-                        r["Type"] = "Reconciliation"
+                        r["Type"] = ">> Bill Settled (Reconciliation)"
                         orig_amt = doc_amounts.get(doc_no, None)
                         orig_amt_str = f" | Amt: {int(orig_amt):,}" if orig_amt else ""
                         doc_type = "Cr Note" if doc_no.startswith(('3','4','9')) else "Dr Note" if doc_no.startswith('5') else "TCS Dr Note" if doc_no.startswith('8') else "Inv"
@@ -422,6 +424,30 @@ def process_pdf_logic(uploaded_file):
                 grouped_data.append(r)
 
         final_data = grouped_data
+        
+        # ==== NEW: AUTOMATIC BATCH RECONCILIATION SUMMARY INJECTION ====
+        reconc_summary_injected = []
+        for date_key, group in itertools.groupby(final_data, key=lambda x: x["Date"]):
+            group_list = list(group)
+            recon_rows = [r for r in group_list if "Reconciliation" in str(r["Type"]) or "Advance Carried Forward" in str(r["Type"]) or "Advance Utilized" in str(r["Type"])]
+            reconc_summary_injected.extend(group_list)
+            
+            if recon_rows and date_key != "":
+                tot_adv = sum(float(r["Debit"]) for r in recon_rows if "Advance Utilized" in str(r["Type"]) and r["Debit"] != "")
+                tot_bill = sum(float(r["Credit"]) for r in recon_rows if "Bill Settled" in str(r["Type"]) and r["Credit"] != "")
+                tot_cf = sum(float(r["Credit"]) for r in recon_rows if "Advance Carried Forward" in str(r["Type"]) and r["Credit"] != "")
+                
+                if tot_adv > 0 or tot_bill > 0:
+                    rem_str = f"Total Adv Used: {int(tot_adv):,} | Total Bills Paid: {int(tot_bill):,}"
+                    if tot_cf > 0:
+                        rem_str += f" | New Adv Created: {int(tot_cf):,}"
+                    
+                    reconc_summary_injected.append({
+                        "Date": "", "Type": "-> BATCH SETTLEMENT SUMMARY", "Doc No": "", "Chq No": "",
+                        "Debit": "", "Credit": "", "Balance": "", "Remarks": rem_str
+                    })
+        final_data = reconc_summary_injected
+        
         final_data.append({"Date": "", "Type": "CLOSING BAL", "Doc No": "", "Chq No": "", "Debit": "", "Credit": "", "Balance": round(running_balance, 2), "Remarks": ""})
         
         pending_invoices = []
@@ -458,229 +484,4 @@ def process_pdf_logic(uploaded_file):
             ("OPENING BAL", opening_balance), ("Sales Invoice", s_inv), ("PAYMENT", pay), ("Reconciliation", reco),
             ("Credit Note(Others)", c_oth), ("Credit Note(Brakage Expiry)", c_brk), ("Goods Return Invoice", g_ret),
             ("Debit Note", d_not), ("TCS Debit Note", tcs), ("TDS Credit Note", tds),
-            ("TECHNICAL BOUNCED", tech_b), ("NON TECHNICAL BOUNCED", n_tech_b), ("CLOSING BAL", running_balance)
-        ]
-        
-        dash_info = {
-            "Opening Bal": opening_balance, "Billed (Dr)": total_billed_dr, 
-            "Paid / Adj (Cr)": total_paid_cr, "Closing Bal": running_balance, 
-            "Total Pending": running_balance  # EXACT MATCH
-        }
-        return final_data, header_info, summary_info, dash_info, pending_invoices, None
-    return None, None, None, None, None, "Data sapadla nahi."
-
-def get_pdf_download_fpdf(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
-    from fpdf import FPDF
-    
-    class PDF(FPDF):
-        def header(self):
-            def safe_str(s): return str(s).encode('latin1', 'ignore').decode('latin1')
-            logo_file = next((f for f in ["logo.png", "Logo.png", "logo.jpg"] if os.path.exists(f)), None)
-            if logo_file: 
-                self.image(logo_file, x=85, y=5, w=40)
-                self.ln(15)
-            else: 
-                self.ln(5)
-            
-            h_info = getattr(self, 'h_info', {'Time':'', 'Period':'', 'CustomerNo':'', 'CustomerName':''})
-            m_name = getattr(self, 'm_name', '')
-            c_name = getattr(self, 'c_name', '')
-            
-            cust_name = m_name if m_name.strip() else h_info.get('CustomerName', '')
-            cfa_text = f" | CFA Name: {c_name}" if c_name.strip() else ""
-            
-            self.set_font("Arial", 'B', 13)
-            self.cell(190, 6, txt="VIRBAC - STATEMENT OF ACCOUNT", ln=True, align='C')
-            self.set_font("Arial", size=10)
-            self.cell(190, 6, txt=safe_str(f"Time: {h_info.get('Time','')} | Period: {h_info.get('Period','')}"), ln=True, align='C')
-            self.cell(190, 6, txt=safe_str(f"Customer No: {h_info.get('CustomerNo','')} | Customer Name: {cust_name}{cfa_text}"), ln=True, align='C')
-            self.ln(5)
-
-        def footer(self):
-            self.set_y(-15)
-            self.set_font('Arial', 'I', 9)
-            self.cell(0, 10, f'Page {self.page_no()} of {{nb}}', 0, 0, 'C')
-
-    pdf = PDF()
-    pdf.h_info = header_info
-    pdf.m_name = manual_name
-    pdf.c_name = cfa_name
-    
-    pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=False)
-    pdf.add_page()
-    
-    def safe_str(s): return str(s).encode('latin1', 'ignore').decode('latin1')
-    
-    dash_w = 190 / 5
-    dash_headers = ["Opening Bal", "Billed (Dr) +", "Paid / Adj (Cr) -", "Closing Bal =", "Total Pending"]
-    pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(220, 235, 255)
-    for h in dash_headers: pdf.cell(dash_w, 6, safe_str(h), border=1, align='C', fill=True)
-    pdf.ln(); pdf.set_font("Arial", 'B', 9)
-    
-    dash_vals = [
-        f"{int(dash_info['Opening Bal']):,}", f"{int(dash_info['Billed (Dr)']):,}", 
-        f"{int(dash_info['Paid / Adj (Cr)']):,}", f"{int(dash_info['Closing Bal']):,}", 
-        f"{int(dash_info['Total Pending']):,}"
-    ]
-    
-    for i, v in enumerate(dash_vals):
-        if i == 4: pdf.set_text_color(200, 0, 0)
-        pdf.cell(dash_w, 8, safe_str(v), border=1, align='C'); pdf.set_text_color(0, 0, 0)
-    pdf.ln(8)
-    
-    pdf.set_font("Arial", 'B', 9)
-    pdf.cell(100, 6, "Transaction Type", border=1, align='L')
-    pdf.cell(40, 6, "Amount (INR)", border=1, ln=True, align='R')
-    pdf.set_font("Arial", size=9)
-    for row in summary_info:
-        pdf.cell(100, 6, safe_str(row[0]), border=1, align='L')
-        pdf.cell(40, 6, f"{int(float(row[1])):,}", border=1, ln=True, align='R')
-    pdf.ln(5)
-    
-    col_widths = [13, 35, 16, 31, 15, 15, 17, 48] 
-    headers = ["Date", "Type", "Doc No", "Chq/NEFT No", "Billed (Dr)", "Paid (Cr)", "Balance", "Remarks"]
-    pdf.set_font("Arial", 'B', 8); pdf.set_fill_color(240, 240, 240)
-    for i in range(len(headers)): pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C', fill=True)
-    pdf.ln()
-    
-    for r in final_data:
-        wrapped_remarks = textwrap.wrap(safe_str(r['Remarks']), width=36) or [""]
-        row_height = len(wrapped_remarks) * 6
-        if pdf.get_y() + row_height > 275:
-            pdf.add_page(); pdf.set_font("Arial", 'B', 8)
-            for i in range(len(headers)): pdf.cell(col_widths[i], 6, safe_str(headers[i]), border=1, align='C', fill=True)
-            pdf.ln()
-        
-        y_start = pdf.get_y(); temp_x = 10
-        type_str = str(r['Type']).strip()
-        
-        is_summary = "SUMMARY" in type_str.upper()
-        is_closing = "CLOSING BAL" in type_str
-        is_bounced = "BOUNCED" in type_str.upper() and not is_summary
-        
-        if is_summary or is_closing: 
-            pdf.set_fill_color(240, 245, 250); pdf.set_font("Arial", 'B', 7); pdf.set_text_color(0, 0, 0); fill_row = True
-        elif is_bounced: 
-            pdf.set_text_color(200, 0, 0); pdf.set_font("Arial", 'B', 7); fill_row = False
-        else: 
-            pdf.set_font("Arial", size=7); pdf.set_text_color(0, 0, 0); fill_row = False
-            
-        style = 'DF' if fill_row else 'D'
-        
-        if is_summary:
-            merged_w = sum(col_widths[2:7])
-            pdf.rect(temp_x, y_start, col_widths[0], row_height, style)
-            pdf.rect(temp_x + col_widths[0], y_start, col_widths[1], row_height, style)
-            pdf.rect(temp_x + col_widths[0] + col_widths[1], y_start, merged_w, row_height, style)
-            pdf.rect(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start, col_widths[7], row_height, style)
-            
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C')
-            pdf.set_xy(temp_x + col_widths[0], y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L')
-            pdf.set_xy(temp_x + col_widths[0] + col_widths[1], y_start); pdf.cell(merged_w, 6, safe_str(r['Chq No']), align='C')
-            
-            for i, line in enumerate(wrapped_remarks):
-                pdf.set_xy(temp_x + col_widths[0] + col_widths[1] + merged_w, y_start + (i * 6))
-                pdf.cell(col_widths[7], 6, line, align='L')
-            pdf.set_y(y_start + row_height)
-            
-        else:
-            cur_rect_x = temp_x
-            for w in col_widths: pdf.rect(cur_rect_x, y_start, w, row_height, style); cur_rect_x += w
-            
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[0], 6, safe_str(r['Date']), align='C'); temp_x += col_widths[0]
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[1], 6, safe_str(r['Type'])[:35], align='L'); temp_x += col_widths[1]
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[2], 6, safe_str(r['Doc No']), align='C'); temp_x += col_widths[2]
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[3], 6, safe_str(r['Chq No'])[:30], align='C'); temp_x += col_widths[3]
-            
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[4], 6, f"{int(float(r['Debit'])):,}" if r['Debit']!="" else "", align='R'); temp_x += col_widths[4]
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[5], 6, f"{int(float(r['Credit'])):,}" if r['Credit']!="" else "", align='R'); temp_x += col_widths[5]
-            pdf.set_xy(temp_x, y_start); pdf.cell(col_widths[6], 6, f"{int(float(r['Balance'])):,}" if r['Balance']!="" else "", align='R'); temp_x += col_widths[6]
-            for i, line in enumerate(wrapped_remarks):
-                pdf.set_xy(temp_x, y_start + (i * 6)); pdf.cell(col_widths[7], 6, line, align='L')
-            pdf.set_y(y_start + row_height); pdf.set_text_color(0, 0, 0)
-        
-    if pending_invoices:
-        pdf.ln(5); pdf.set_font("Arial", 'B', 9); pdf.set_fill_color(255, 204, 204) 
-        pdf.cell(190, 6, "OUTSTANDING / PENDING BILLS SUMMARY", border=1, ln=True, align='C', fill=True)
-        p_col_widths = [25, 40, 55, 35, 35]; p_headers = ["Date", "Doc No", "Type", "Billed (INR)", "Pending (INR)"]
-        pdf.set_font("Arial", 'B', 8)
-        for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
-        pdf.ln(); pdf.set_font("Arial", size=8); total_pending = 0.0
-        
-        for p in pending_invoices:
-            if pdf.get_y() > 260: 
-                pdf.add_page()
-                pdf.set_font("Arial", 'B', 8)
-                pdf.set_fill_color(255, 204, 204)
-                for i in range(len(p_headers)): pdf.cell(p_col_widths[i], 6, safe_str(p_headers[i]), border=1, align='C', fill=True)
-                pdf.ln()
-                pdf.set_font("Arial", size=8)
-            
-            b_amt_str = f"{int(float(p['Billed Amt'])):,}" if str(p['Billed Amt']) != "" else ""
-            p_amt_str = f"{int(float(p['Pending Amt'])):,}" if str(p['Pending Amt']) != "" else ""
-                
-            pdf.cell(p_col_widths[0], 6, safe_str(p['Date']), border=1, align='C')
-            pdf.cell(p_col_widths[1], 6, safe_str(p['Doc No']), border=1, align='C')
-            pdf.cell(p_col_widths[2], 6, safe_str(p['Type'])[:25], border=1, align='C')
-            pdf.cell(p_col_widths[3], 6, b_amt_str, border=1, align='R')
-            pdf.cell(p_col_widths[4], 6, p_amt_str, border=1, align='R')
-            pdf.ln()
-            total_pending += p['Pending Amt']
-            
-        pdf.set_font("Arial", 'B', 8); pdf.cell(sum(p_col_widths[:4]), 6, "Total Outstanding:", border=1, align='R')
-        pdf.cell(p_col_widths[4], 6, f"{int(total_pending):,}", border=1, ln=True, align='R')
-
-    if pdf.get_y() > 240: pdf.add_page()
-    pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.set_text_color(100, 100, 100)
-    pdf.multi_cell(190, 5, safe_str("Note: This is a computer generated statement. If you have any queries or discrepancies regarding this statement, please contact our CFA / Accounts team within 7 days of receipt. Thank you for your business!"), align='L')
-    pdf.ln(5); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", 'B', 11)
-    pdf.cell(190, 6, "For Virbac Animal Health India Pvt Ltd", ln=True); pdf.ln(5)
-    if cfa_name.strip(): pdf.cell(190, 6, safe_str(f"Authorized Signatory: {cfa_name}"), ln=True)
-    pdf.ln(5); pdf.cell(190, 6, "Signature                  Place: ___________      Date: ___________", ln=True)
-    return bytes(pdf.output(dest='S').encode('latin1', 'ignore'))
-
-def get_excel_download(final_data, header_info, summary_info, dash_info, pending_invoices, manual_name="", cfa_name=""):
-    output = io.BytesIO(); cust_name = manual_name if manual_name.strip() else header_info['CustomerName']
-    excel_data = [{"Date": r["Date"], "Type": r["Type"], "Doc No": r["Doc No"], "Chq/NEFT No": r["Chq No"], "Billed Amt (Dr)": r["Debit"], "Paid Amt (Cr)": r["Credit"], "Balance": r["Balance"], "Remarks": r["Remarks"]} for r in final_data]
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        pd.DataFrame([["Report Time:", header_info["Time"]], ["Heading:", "STATEMENT OF ACCOUNT"], ["Period:", header_info["Period"]], ["Customer No:", header_info["CustomerNo"]], ["Customer Name:", cust_name], ["CFA Name:", cfa_name]]).to_excel(writer, sheet_name='Statement', index=False, header=False)
-        
-        pd.DataFrame([["Opening Bal", "Billed (Dr)", "Paid / Adj (Cr)", "Closing Bal", "Total Pending"], [dash_info['Opening Bal'], dash_info['Billed (Dr)'], dash_info['Paid / Adj (Cr)'], dash_info['Closing Bal'], dash_info['Total Pending']]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=8)
-        
-        pd.DataFrame(summary_info, columns=["Transaction Type", "Amount (INR)"]).to_excel(writer, sheet_name='Statement', index=False, startrow=12)
-        
-        start_main = 12 + len(summary_info) + 3
-        pd.DataFrame(excel_data).to_excel(writer, sheet_name='Statement', index=False, startrow=start_main)
-        
-        if pending_invoices:
-            start_row_pending = start_main + len(excel_data) + 3
-            pd.DataFrame([["OUTSTANDING / PENDING BILLS SUMMARY"]]).to_excel(writer, sheet_name='Statement', index=False, header=False, startrow=start_row_pending)
-            pd.DataFrame(pending_invoices).to_excel(writer, sheet_name='Statement', index=False, startrow=start_row_pending + 1)
-    return output.getvalue()
-
-if uploaded_files:
-    for file in uploaded_files:
-        data, h_info, s_info, dash_info, pending_inv, err = process_pdf_logic(file)
-        if err: st.error(err)
-        else:
-            st.success(f"✅ {file.name} ready!")
-            st.write("### 📊 Dashboard Summary")
-            
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Opening Bal", f"₹ {int(dash_info['Opening Bal']):,}")
-            c2.metric("Billed (Dr)", f"₹ {int(dash_info['Billed (Dr)']):,}")
-            c3.metric("Paid (Cr)", f"₹ {int(dash_info['Paid / Adj (Cr)']):,}")
-            c4.metric("Closing Bal", f"₹ {int(dash_info['Closing Bal']):,}")
-            c5.metric("Total Pending", f"₹ {int(dash_info['Total Pending']):,}", delta_color="inverse")
-            
-            st.write("---")
-            col_in1, col_in2 = st.columns(2)
-            with col_in1: manual_name = st.text_input("Customer Name (optional):", key=f"cust_{file.name}")
-            with col_in2: cfa_name = st.text_input("CFA Name (optional):", key=f"cfa_{file.name}")
-            if st.button("✅ फाईल तयार करा (Prepare Files)", key=f"btn_{file.name}"): st.session_state[f"ready_{file.name}"] = True
-            if st.session_state.get(f"ready_{file.name}", False):
-                st.write("---")
-                col1, col2 = st.columns(2)
-                with col1: st.download_button("📥 Excel Download", get_excel_download(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.xlsx", key=f"dl_xl_{file.name}")
-                with col2: st.download_button("📥 PDF Download", get_pdf_download_fpdf(data, h_info, s_info, dash_info, pending_inv, manual_name, cfa_name), f"{file.name}.pdf", key=f"dl_pdf_{file.name}")
+            ("TECHNICAL BOUNCED", tech_b), ("NON TECHNICAL BOUNCED", n_
