@@ -13,7 +13,7 @@ st.set_page_config(page_title="Virbac Statement Converter", page_icon="📄", la
 st.title("📄 Virbac Account Statement Converter (Smart Tracking)")
 st.markdown("CFA Team sathi: PDF upload kara ani **Excel + PDF** donhi milva.")
 
-uploaded_files = st.file_uploader("Yethe PDF file upload kara", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload PDF file here", type="pdf", accept_multiple_files=True)
 
 def process_pdf_logic(uploaded_file):
     uploaded_file.seek(0)
@@ -459,7 +459,7 @@ if uploaded_files:
                 data, h_info, s_info, d_info, p_inv, err = process_pdf_logic(f)
                 if err: st.error(f"❌ त्रुटी: {err}")
                 else:
-                    st.success(f"✅ {f.name} यशस्वीरीत्या प्रोसेस झाली!")
+                    st.success(f"✅ {f.name} processed successfully!")
                     c1, c2, c3, c4, c5 = st.columns(5)
                     c1.metric("Opening Bal", f"₹ {int(d_info.get('Opening Bal',0)):,}")
                     c2.metric("Billed (Dr)", f"₹ {int(d_info.get('Billed (Dr)',0)):,}")
@@ -470,7 +470,7 @@ if uploaded_files:
                     ci1, ci2 = st.columns(2)
                     with ci1: mn = st.text_input("Customer Name:", key=f"c_{f.name}")
                     with ci2: cn = st.text_input("CFA Name:", key=f"cf_{f.name}")
-                    if st.button("✅ फाईल तयार करा", key=f"b_{f.name}"): st.session_state[f"r_{f.name}"] = True
+                    if st.button("✅ Generate Statement", key=f"b_{f.name}"): st.session_state[f"r_{f.name}"] = True
                     if st.session_state.get(f"r_{f.name}", False):
                         st.write("---")
                         cl1, cl2 = st.columns(2)
